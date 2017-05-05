@@ -5,7 +5,7 @@ This was mostly copied from [@tcr's repo](https://github.com/tcr/macbook-brightn
 just repackaged for ease of use.  I had trouble finding any other easy-to-use binary for controlling
 keyboard brightness, so I made one.
 
-![](https://nicksweeting.com/d/keyboard.gif)
+![Flashing keyboard](https://nicksweeting.com/d/keyboard.gif) ![Flashing display](https://nicksweeting.com/d/display.gif)
 
 ## Usage
 
