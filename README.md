@@ -44,7 +44,7 @@ It's fun.  Here are some ideas:
 If you want to write more advanced programs to update the brightness at higher frequencies
 (e.g. to make your keyboard flash to music), you can use the C functions directly.
 
- - `setDisplayBrightness`, `setDisplayBrightness`
+ - `setDisplayBrightness`, `getDisplayBrightness`
  - `setKeyboardBrightness`, `getKeyboardBrightness`
  - `getLightSensors`: get ambient light sensor values, see [@tcr's original repo](https://github.com/tcr/macbook-brightness/blob/master/displaybrightness.c#L54)
 
