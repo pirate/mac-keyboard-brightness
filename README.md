@@ -27,7 +27,7 @@ cd mac-keyboard-brightness/
 
 It's fun.  Here are some ideas:
 
- - Make a bitbar menubar app to control keyboard brightness
+ - make a bitbar menubar app to control keyboard brightness
  - make your keyboard lights flash for security alerts using [Security Growler](https://github.com/pirate/security-growler)
  - make your keyboard flash right before your display is about to sleep
  - make your keyboard flash on incoming email
@@ -41,7 +41,7 @@ If you want to write more advanced programs to update the brightness at higher f
 
  - `setDisplayBrightness`, `setDisplayBrightness`
  - `setKeyboardBrightness`, `getKeyboardBrightness`
- - `getLightSensors`: see [@tcr's original repo](https://github.com/tcr/macbook-brightness/blob/master/displaybrightness.c#L54)
+ - `getLightSensors`: get ambient light sensor values, see [@tcr's original repo](https://github.com/tcr/macbook-brightness/blob/master/displaybrightness.c#L54)
 
 Compile each file individually with:
 
@@ -51,7 +51,7 @@ gcc -std=c99 -o kbrightness keyboard-brightness.c -framework IOKit -framework Ap
 gcc -std=c99 -o dbrightness display-brightness.c -framework IOKit -framework ApplicationServices
 ```
 
-## Credits
+## Links
 
 - https://github.com/tcr/macbook-brightness (all of the code is copied from @tcr's, just separated by function)
 - http://stackoverflow.com/questions/3239749/programmatically-change-mac-display-brightness
