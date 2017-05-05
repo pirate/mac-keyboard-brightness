@@ -1,12 +1,11 @@
 # Control Mac Keyboard & Display Brightness: kbrightness & dbrightness
 Programmatically set the keyboard & display brightness on macs with built-in backlit keyboards.
 
+This was mostly copied from [@tcr's repo](https://github.com/pirate/mac-keyboard-brightness), 
+just repackaged for ease of use.  I had trouble finding any other easy-to-use binary for controlling
+keyboard brightness, so I made one.
+
 ## Usage
-
-You can download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra).
-
- - `kbrightness` manages the keyboard backlight brightness
- - `dbrightness` manages the display backlight brightness
 
 Pass a float between 0-1 to the command to set brightness, or no args to get the current brightness.
 
@@ -22,6 +21,10 @@ cd mac-keyboard-brightness/
 ./dbrightness
 # 0.938477
 ```
+You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra).
+
+ - `kbrightness` manages the keyboard backlight brightness
+ - `dbrightness` manages the display backlight brightness
 
 ## Why?
 
