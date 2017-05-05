@@ -15,13 +15,13 @@ Pass a float between 0-1 to the command to set brightness, or no args to get the
 git clone https://github.com/pirate/mac-keyboard-brightness
 cd mac-keyboard-brightness/
 
-./kbrightness 0.85     # sets keyboard brightness to 85%
 ./kbrightness
 # 0.286447
+./kbrightness 0.85     # sets keyboard brightness to 85%
 
-./dbrightness 0.42     # sets display brightness to 42%
 ./dbrightness
 # 0.938477
+./dbrightness 0.42     # sets display brightness to 42%
 ```
 You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra).
 
