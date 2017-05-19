@@ -29,7 +29,7 @@ io_connect_t getDataPort(void) {
     serviceObject = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("AppleLMUController"));
 
     if (!serviceObject) {
-        printf("getLightSensors() error: failed to find ambient light sensor\n");
+        printf("Failed to connect to AppleLMUController\n");
         return 0;
     }
 
@@ -38,7 +38,7 @@ io_connect_t getDataPort(void) {
     IOObjectRelease(serviceObject);
 
     if (kr != KERN_SUCCESS) {
-        printf("getLightSensors() error: failed to open IoService object\n");
+        printf("Failed to open IoService object\n");
         return 0;
     }
     return dataPort;
