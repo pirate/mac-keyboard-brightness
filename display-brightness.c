@@ -9,8 +9,7 @@
 #include <IOKit/graphics/IOGraphicsLib.h>
 #include <ApplicationServices/ApplicationServices.h>
 
-float getDisplayBrightness(void)
-{
+float getDisplayBrightness(void) {
   CGDisplayErr      dErr;
   io_service_t      service;
   CGDirectDisplayID targetDisplay;
@@ -26,8 +25,7 @@ float getDisplayBrightness(void)
   return brightness;
 }
 
-void setDisplayBrightness(float brightness)
-{
+void setDisplayBrightness(float brightness) {
   CGDisplayErr      dErr;
   io_service_t      service;
   CGDirectDisplayID targetDisplay;
@@ -37,7 +35,6 @@ void setDisplayBrightness(float brightness)
   service = CGDisplayIOServicePort(targetDisplay);
 
   dErr = IODisplaySetFloatParameter(service, kNilOptions, key, brightness);
-
 }
 
 
