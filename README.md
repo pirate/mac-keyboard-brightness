@@ -1,32 +1,40 @@
 # Control Mac Keyboard Brightness: kbrightness & dbrightness
-Programmatically set the keyboard & display brightness on macs with built-in backlit keyboards.
+Programmatically flash the keyboard lights and control display brightness on Macs.
 
-This was mostly copied from [@tcr's repo](https://github.com/tcr/macbook-brightness), 
-just repackaged for ease of use.  I had trouble finding any other easy-to-use binary for controlling
-keyboard brightness, so I made one.
+This was inspired by [@tcr's repo](https://github.com/tcr/macbook-brightness).
+I had trouble finding any other easy-to-use binary for controlling keyboard brightness, so I made one.
 
 ![Flashing keyboard](https://nicksweeting.com/d/keyboard.gif) ![Flashing display](https://nicksweeting.com/d/display.gif)
 
 ## Usage
+=======
 
-Pass a float between 0-1 to the command to set brightness, or no args to get the current brightness.
+ - `blink` is a shortcut to flash the keyboard lights [n] times for [t] seconds each time
+ - `kbrightness` manages the keyboard backlight brightness
+ - `dbrightness` manages the display backlight brightness
+
+Use blink in your shell scripts to alert you when things have succeeded or failed.
+e.g. `wget https://example.com/large-file.mp4 && blink 2` or `./tests.py || blink 3 1`
 
 ```bash
 git clone https://github.com/pirate/mac-keyboard-brightness
 cd mac-keyboard-brightness/
 
-./kbrightness
+./kbrightness          # gets current keyboard brightness
 # 0.286447
 ./kbrightness 0.85     # sets keyboard brightness to 85%
 
-./dbrightness
+./dbrightness          # gets current display brightness
 # 0.938477
 ./dbrightness 0.42     # sets display brightness to 42%
+=======
+
+./blink                # flash the keyboard lights once (good for subtle alerts, e.g. git pull && blink 2)
+./blink 2              # flash the keyboard lights twice
+./blink 10 0.1         # flash the keyboard lights 10 times, for 0.1 seconds each time
+./blink 1000 0.01      # turn your keyboard into a disco strobe
 ```
 You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra).
-
- - `kbrightness` manages the keyboard backlight brightness
- - `dbrightness` manages the display backlight brightness
 
 ## Why?
 
