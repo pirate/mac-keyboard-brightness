@@ -7,7 +7,6 @@ I had trouble finding any other easy-to-use binary for controlling keyboard brig
 ![Flashing keyboard](https://nicksweeting.com/d/keyboard.gif) ![Flashing display](https://nicksweeting.com/d/display.gif)
 
 ## Usage
-=======
 
  - `blink` is a shortcut to flash the keyboard lights [n] times for [t] seconds each time
  - `kbrightness` manages the keyboard backlight brightness
