@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# Flash the keyboard [1] times with a [0.15]s delay
+# Usage:
+#   blink [times] [duration]
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+bin="$DIR/kbrightness"
+
+before=$(/Users/squash/Documents/Code/mac-keyboard-brightness/kbrightness)
+flashes=${1:-'1'}
+duration=${2:-'0.15'}
+
+for i in $(seq 1 $flashes); do
+    $bin 1
+    sleep $duration
+    $bin 0
+    sleep $duration
+done
+
+$bin "$before"
