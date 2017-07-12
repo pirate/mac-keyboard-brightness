@@ -9,20 +9,21 @@ if [[ "$1" == "-h" || "$1" == "--help" || "$1" == "help" ]]; then
     exit 0
 fi
 
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-bin="$DIR/kbrightness"
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"  # get the full path to the directory ./blink is in
+kbrightness="$DIR/kbrightness"                           # full path to the kbrightness binary
 
-before=$("$bin")
-flashes=${1:-'1'}
-duration=${2:-'0.15'}
-low_level=${3:-'0'}
-high_level=${4:-'1'}
+flashes=${1:-'1'}         # how many flashes
+duration=${2:-'0.15'}     # duration of each flash in seconds
+low_level=${3:-'0'}       # lowest brightness level, 0.0 -> 1.0
+high_level=${4:-'1'}      # highest brightness level, 0.0 -> 1.0
+before=$("$kbrightness")  # get the current brightness level
 
 for i in $(seq 1 $flashes); do
-    "$bin" $low_level
+    "$kbrightness" $low_level
     sleep $duration
-    "$bin" $high_level
+    "$kbrightness" $high_level
     sleep $duration
 done
 
-"$bin" $before
+# set keyboard back to existing brightness level before blink ran
+"$kbrightness" $before
