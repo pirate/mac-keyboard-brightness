@@ -1,8 +1,12 @@
 #!/bin/bash
+# Nick Sweeting 2017
+# MIT License
 
-# Flash the keyboard [1] times with a [0.15]s delay
-# Usage:
-#   blink [times] [duration]
+if [[ "$1" == "-h" || "$1" == "--help" || "$1" == "help" ]]; then
+    echo "Flash the keyboard [1] times with a [0.15]s delay, between [0] and [1] brightness levels"
+    echo "Usage:"
+    echo "    blink [times] [duration] [low_brightness] [high_brightness]"
+fi
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 bin="$DIR/kbrightness"
@@ -10,12 +14,14 @@ bin="$DIR/kbrightness"
 before=$("$bin")
 flashes=${1:-'1'}
 duration=${2:-'0.15'}
+low_level=${3:-'0'}
+high_level=${4:-'1'}
 
 for i in $(seq 1 $flashes); do
-    $bin 1
+    "$bin" $low_level
     sleep $duration
-    $bin 0
+    "$bin" $high_level
     sleep $duration
 done
 
-$bin "$before"
+"$bin" $before
