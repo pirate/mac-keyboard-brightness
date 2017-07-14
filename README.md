@@ -77,3 +77,4 @@ gcc -std=c99 -o dbrightness display-brightness.c -framework IOKit -framework App
 - http://osxbook.com/book/bonus/chapter10/light/
 - https://github.com/samnung/maclight/blob/master/lights_handle.cpp
 - http://www.keindesign.de/stefan/Web/Sites/iWeb/Site/iSpazz.html
+- https://github.com/bhoeting/DiscoKeyboard
