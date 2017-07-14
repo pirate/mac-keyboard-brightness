@@ -11,6 +11,7 @@ I had trouble finding any other easy-to-use binary for controlling keyboard brig
  - `blink` is a shortcut to flash the keyboard lights [n] times for [t] seconds each time
  - `kbrightness` manages the keyboard backlight brightness
  - `dbrightness` manages the display backlight brightness
+ - `python3 audio.py` flash the keyboard based on the audio input from your mic, makes it flash to the beat of music
 
 Use blink in your shell scripts to alert you when things have succeeded or failed.
 e.g. `wget https://example.com/large-file.mp4 && blink 2` or `./tests.py || blink 3 1`
@@ -32,6 +33,11 @@ cd mac-keyboard-brightness/
 ./blink 2              # flash the keyboard lights twice
 ./blink 10 0.1         # flash the keyboard lights 10 times, for 0.1 seconds each time
 ./blink 1000 0.01      # turn your keyboard into a disco strobe
+
+=======
+
+pip3 install --upgrade pyaudio audioop
+python3 audio.py       # flash your keyboard to the beat of the music! (uses mic input)
 ```
 You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra).
 

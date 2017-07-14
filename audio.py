@@ -32,7 +32,7 @@ def runloop(stream):
         rms = audioop.rms(data, 2)         # here's where you calculate the volume
         level = rms / 20000
         run(['./kbrightness', str(level)])
-        sleep(POLL_SPEED)
+        # sleep(POLL_SPEED)
 
 
 if __name__ == '__main__':
