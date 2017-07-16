@@ -2,16 +2,20 @@ try:
     import pyaudio
     import audioop
 except ImportError:
-    print('Missing pyaudio, run:'
+    print('Missing pyaudio, run:\n'
           '    pip3 install --upgrade pyaudio audioop')
     raise
 
-from time import sleep
-from subprocess import run
+try:
+    from subprocess import run
+except ImportError:
+    print('You must run this program with python3 not python2:\n'
+          '    brew install python3')
+    raise
 
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
-CHANNELS = 2
+CHANNELS = 1
 RATE = 44100
 RECORD_SECONDS = 5
 WAVE_OUTPUT_FILENAME = "output.wav"
