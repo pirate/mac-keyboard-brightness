@@ -1,4 +1,11 @@
 try:
+    from subprocess import run
+except ImportError:
+    print('You must run this program with python3 not python2:\n'
+          '    brew install python3')
+    raise
+
+try:
     import pyaudio
     import audioop
 except ImportError:
@@ -6,20 +13,13 @@ except ImportError:
           '    pip3 install --upgrade pyaudio audioop')
     raise
 
-try:
-    from subprocess import run
-except ImportError:
-    print('You must run this program with python3 not python2:\n'
-          '    brew install python3')
-    raise
 
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
-RECORD_SECONDS = 5
-WAVE_OUTPUT_FILENAME = "output.wav"
 POLL_SPEED = 0.001
+
 
 def get_mic(p):
     stream = p.open(format=FORMAT,
@@ -36,7 +36,6 @@ def runloop(stream):
         rms = audioop.rms(data, 2)         # here's where you calculate the volume
         level = rms / 20000
         run(['./kbrightness', str(level)])
-        # sleep(POLL_SPEED)
 
 
 if __name__ == '__main__':
