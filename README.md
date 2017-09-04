@@ -36,8 +36,10 @@ cd mac-keyboard-brightness/
 
 =======
 
+# Flash your keyboard to the beat of the music! (uses mic input)
+brew install python3 pyaudio portaudio
 pip3 install --upgrade pyaudio audioop
-python3 audio.py       # flash your keyboard to the beat of the music! (uses mic input)
+python3 audio.py
 ```
 You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra).
 
