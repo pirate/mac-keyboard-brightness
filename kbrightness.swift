@@ -6,7 +6,7 @@ class Backlight {
     private var numberOfToggles = 0
     private var isFlashingOnce = false
     private var connect: mach_port_t = 0
-    private var timer:NSTimer = NSTimer()
+    private var timer: Timer = Timer()
     
     static var sharedBacklight = Backlight()
     static let FastFlashingInterval = 0.02
@@ -20,7 +20,7 @@ class Backlight {
     init() {
         // Get the AppleLMUController (thing that accesses the light hardware)
         let serviceObject = IOServiceGetMatchingService(kIOMasterPortDefault,
-            IOServiceMatching("AppleLMUController"))
+                                                        IOServiceMatching("AppleLMUController"))
         assert(serviceObject != 0, "Failed to get service object")
         
         // Open the AppleLMUController
@@ -34,11 +34,11 @@ class Backlight {
     
     
     func startFlashing(target: AnyObject, interval: Float64, selector: Selector) {
-        self.timer = NSTimer.scheduledTimerWithTimeInterval(
-            interval, target: target, selector: selector, userInfo: nil, repeats: true)
+        self.timer = Timer.scheduledTimer(
+            timeInterval: interval, target: target, selector: selector, userInfo: nil, repeats: true)
         
         // We need to add the timer to the mainRunLoop so it doesn't stop flashing when the menu is accessed
-        NSRunLoop.mainRunLoop().addTimer(self.timer, forMode: NSRunLoopCommonModes)
+        RunLoop.main.add(self.timer, forMode: RunLoopMode.commonModes)
         self.isFlashing = true
     }
     
@@ -62,12 +62,12 @@ class Backlight {
     }
     
     func on() {
-        set(Backlight.MaxBrightness)
+        set(brightness: Backlight.MaxBrightness)
         isOn = true
     }
     
     func off() {
-        set(Backlight.MinBrightness)
+        set(brightness: Backlight.MinBrightness)
         isOn = false
     }
     
@@ -78,7 +78,7 @@ class Backlight {
         let input: [UInt64] = [0, brightness]
         
         let status = IOConnectCallMethod(connect, setBrightnessMethodId, input, UInt32(input.count),
-            nil, 0, &output, &outputCount, nil, nil)
+                                         nil, 0, &output, &outputCount, nil, nil)
         
         assert(status == KERN_SUCCESS, "Failed to set brightness; status: \(status)")
     }
@@ -88,3 +88,4 @@ class Backlight {
     }
     
 }
+
