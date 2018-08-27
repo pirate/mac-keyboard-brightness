@@ -43,8 +43,8 @@ def start():
     try:
         runloop(stream)
     except (KeyboardInterrupt, Exception):
-        # stream.stop_stream()
         stream.close()
+        stream.stop_stream()
         p.terminate()
         # print('[X] Stopped When Audio End.')
         start()
