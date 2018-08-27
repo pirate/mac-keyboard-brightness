@@ -37,15 +37,18 @@ def runloop(stream):
         level = rms / 20000
         run(['./kbrightness', str(level)])
 
-
-if __name__ == '__main__':
-    print('[+] Starting...')
+def start():
     p = pyaudio.PyAudio()
     stream = get_mic(p)
     try:
         runloop(stream)
     except (KeyboardInterrupt, Exception):
-        stream.stop_stream()
         stream.close()
+        stream.stop_stream()
         p.terminate()
-        print('[X] Stopped.')
+        # print('[X] Stopped When Audio End.')
+        start()
+
+if __name__ == '__main__':
+    print('[+] Started...')
+    start()
