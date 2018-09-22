@@ -2,6 +2,10 @@
 # Nick Sweeting 2017
 # MIT License
 
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+cd "$DIR"
+
 if [[ "$1" == "-h" || "$1" == "--help" || "$1" == "help" ]]; then
     echo "Flash the keyboard [1] times with a [0.15]s delay, between [0] and [1] brightness levels"
     echo "Usage:"
