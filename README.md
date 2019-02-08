@@ -1,5 +1,5 @@
 # Control Mac Keyboard Brightness: kbrightness & dbrightness
-Programmatically flash the keyboard lights and control display brightness on Macs.
+Programmatically flash the keyboard lights and control display brightness on Macs.  You can flash them to the beat of music, or use it for alerts and notifications.
 
 This was inspired by [@tcr's repo](https://github.com/tcr/macbook-brightness).  This is also an alternative to the old iSpazz iTunes plugin, which no longer works.
 I had trouble finding any other easy-to-use binary for controlling keyboard brightness, so I made one.
@@ -41,7 +41,7 @@ brew install python3 pyaudio portaudio
 pip3 install --upgrade pyaudio audioop
 python3 audio.py
 ```
-You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra).
+You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra, High Sierra, and Mojave).
 
 ## Why?
 
