@@ -3,7 +3,6 @@
 # MIT License
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
 cd "$DIR"
 
 if [[ "$1" == "-h" || "$1" == "--help" || "$1" == "help" ]]; then
@@ -13,7 +12,6 @@ if [[ "$1" == "-h" || "$1" == "--help" || "$1" == "help" ]]; then
     exit 0
 fi
 
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"  # get the full path to the directory ./blink is in
 kbrightness="$DIR/kbrightness"                           # full path to the kbrightness binary
 
 flashes=${1:-'1'}         # how many flashes
