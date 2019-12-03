@@ -73,6 +73,7 @@ gcc -std=c99 -o dbrightness display-brightness.c -framework IOKit -framework App
 
 ## Links
 
+- https://github.com/maxmouchet/LightKit control keyboard and screen brightness via Swift
 - https://github.com/tcr/macbook-brightness (the core brightness code is copied from @tcr's, but separated into two cli utils)
 - http://stackoverflow.com/questions/3239749/programmatically-change-mac-display-brightness
 - https://web.archive.org/web/20110828210316/http://mattdanger.net:80/2008/12/adjust-mac-os-x-display-brightness-from-the-terminal/
