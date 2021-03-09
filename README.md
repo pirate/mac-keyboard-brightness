@@ -4,8 +4,9 @@ Programmatically flash the keyboard lights and control display brightness on Mac
 This was inspired by [@tcr's repo](https://github.com/tcr/macbook-brightness).  This is also an alternative to the old iSpazz iTunes plugin, which no longer works.
 I had trouble finding any other easy-to-use binary for controlling keyboard brightness, so I made one.
 
-![Flashing keyboard gif](https://user-images.githubusercontent.com/511499/110451884-a662b780-8092-11eb-9f44-8725c91b2e13.png)
-![Flashing display gif](https://user-images.githubusercontent.com/511499/110451965-b7abc400-8092-11eb-870f-ab1b5957dea7.png)
+
+![Flashing keyboard gif](https://i.imgur.com/AS6tTre.gif)
+![Flashing display gif](https://i.imgur.com/cRFsoDM.gif)
 
 ## Usage
 
