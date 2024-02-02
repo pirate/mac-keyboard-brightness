@@ -1,3 +1,7 @@
+## Archived: Use https://github.com/EthanRDoesMC/KBPulse for Macs released after 2016
+
+---
+
 # Control Mac Keyboard Brightness: kbrightness & dbrightness
 Programmatically flash the keyboard lights and control display brightness on Macs.  You can flash them to the beat of music, or use it for alerts and notifications.
 
