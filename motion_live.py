@@ -1,0 +1,713 @@
+#!/usr/bin/env python3
+"""
+vibration detector + experimental heartbeat (bcg)
+macbook pro m3 pro / apple silicon
+requires: sudo python3 motion_live.py
+          pip install PyWavelets
+"""
+
+import time
+import sys
+import os
+import re
+import json
+import signal
+import math
+import datetime
+import multiprocessing
+import multiprocessing.shared_memory
+from collections import deque
+
+from spu_sensor import (
+    sensor_worker, shm_read_new,
+    SHM_NAME, SHM_SIZE,
+)
+
+
+RST = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[31m"
+GRN = "\033[32m"
+YEL = "\033[33m"
+CYN = "\033[36m"
+BRED = "\033[91m"
+BGRN = "\033[92m"
+BYEL = "\033[93m"
+BCYN = "\033[96m"
+BWHT = "\033[97m"
+CLEAR = "\033[2J\033[H"
+HIDE_CUR = "\033[?25l"
+SHOW_CUR = "\033[?25h"
+
+_ANSI_RE = re.compile(r'\033\[[^m]*m')
+
+
+class VibrationDetector:
+    def __init__(self, fs=100):
+        self.fs = fs
+        self.sample_count = 0
+
+        # high-pass iir for gravity removal
+        self.hp_alpha = 0.95
+        self.hp_prev_raw = [0.0, 0.0, 0.0]
+        self.hp_prev_out = [0.0, 0.0, 0.0]
+        self.hp_ready = False
+
+        N5 = fs * 5
+        self.waveform = deque(maxlen=N5)
+        self.waveform_xyz = deque(maxlen=N5)
+
+        self.latest_raw = (0.0, 0.0, 0.0)
+        self.latest_mag = 0.0
+
+        # sta/lta at 3 timescales
+        self.sta = [0.0, 0.0, 0.0]
+        self.lta = [1e-10, 1e-10, 1e-10]
+        self.sta_n = [3, 15, 50]
+        self.lta_n = [100, 500, 2000]
+        self.sta_lta_thresh_on = [3.0, 2.5, 2.0]
+        self.sta_lta_thresh_off = [1.5, 1.3, 1.2]
+        self.sta_lta_active = [False, False, False]
+        SPARK_W = 30
+        self.sta_lta_ring = [deque(maxlen=SPARK_W) for _ in range(3)]
+        self.sta_lta_latest = [1.0, 1.0, 1.0]
+        self._sta_dec = 0
+
+        # dwt - 5 levels at 100hz
+        self.dwt_buffer = deque(maxlen=512)
+        SPEC_W = 50
+        self.band_energy = [deque(maxlen=SPEC_W) for _ in range(5)]
+        self.band_labels = ['50Hz', '25Hz', '12Hz', ' 6Hz', ' 3Hz']
+        self._dwt_ok = False
+        try:
+            import pywt
+            self._pywt = pywt
+            self._dwt_ok = True
+        except ImportError:
+            self._pywt = None
+
+        # cusum bilateral
+        self.cusum_pos = 0.0
+        self.cusum_neg = 0.0
+        self.cusum_mu = 0.0
+        self.cusum_k = 0.0005
+        self.cusum_h = 0.01
+        self.cusum_val = 0.0
+
+        # kurtosis (1s window)
+        self.kurt_buf = deque(maxlen=100)
+        self.kurtosis = 3.0
+        self._kurt_dec = 0
+
+        # crest factor + mad peak (2s window)
+        self.peak_buf = deque(maxlen=200)
+        self.crest = 1.0
+        self.rms = 0.0
+        self.peak = 0.0
+        self.mad_sigma = 0.0
+
+        self.events = deque(maxlen=500)
+        self.event_ts = deque(maxlen=200)
+
+        # periodicity via autocorrelation
+        self.period = None
+        self.period_std = None
+        self.period_cv = None
+        self.period_freq = None
+        self.acorr_ring = []
+
+        # rms trend (10s, ~10hz output)
+        self.rms_trend = deque(maxlen=100)
+        self._rms_window = deque(maxlen=fs)
+        self._rms_dec = 0
+
+        # heartbeat bcg - bandpass 0.8-3hz via cascaded 1st order iir
+        self.hr_hp_alpha = fs / (fs + 2.0 * math.pi * 0.8)
+        self.hr_lp_alpha = 2.0 * math.pi * 3.0 / (2.0 * math.pi * 3.0 + fs)
+        self.hr_hp_prev_in = 0.0
+        self.hr_hp_prev_out = 0.0
+        self.hr_lp_prev = 0.0
+        self.hr_buf = deque(maxlen=fs * 10)
+        self.hr_bpm = None
+        self.hr_confidence = 0.0
+
+        self._last_evt_t = 0.0
+
+    def process(self, ax, ay, az, t_now):
+        self.sample_count += 1
+        self.latest_raw = (ax, ay, az)
+        self.latest_mag = math.sqrt(ax * ax + ay * ay + az * az)
+
+        if not self.hp_ready:
+            self.hp_prev_raw = [ax, ay, az]
+            self.hp_prev_out = [0.0, 0.0, 0.0]
+            self.hp_ready = True
+            self.waveform.append(0.0)
+            self.dwt_buffer.append(0.0)
+            return
+
+        a = self.hp_alpha
+        hx = a * (self.hp_prev_out[0] + ax - self.hp_prev_raw[0])
+        hy = a * (self.hp_prev_out[1] + ay - self.hp_prev_raw[1])
+        hz = a * (self.hp_prev_out[2] + az - self.hp_prev_raw[2])
+        self.hp_prev_raw = [ax, ay, az]
+        self.hp_prev_out = [hx, hy, hz]
+        mag = math.sqrt(hx * hx + hy * hy + hz * hz)
+
+        self.waveform.append(mag)
+        self.waveform_xyz.append((hx, hy, hz))
+        self.dwt_buffer.append(mag)
+
+        # heartbeat bandpass
+        hp_out = self.hr_hp_alpha * (self.hr_hp_prev_out + mag - self.hr_hp_prev_in)
+        self.hr_hp_prev_in = mag
+        self.hr_hp_prev_out = hp_out
+        lp_out = self.hr_lp_alpha * hp_out + (1.0 - self.hr_lp_alpha) * self.hr_lp_prev
+        self.hr_lp_prev = lp_out
+        self.hr_buf.append(lp_out)
+
+        self._rms_window.append(mag)
+        self._rms_dec += 1
+        if self._rms_dec >= max(1, self.fs // 10):
+            self._rms_dec = 0
+            if self._rms_window:
+                rv = math.sqrt(sum(x * x for x in self._rms_window) / len(self._rms_window))
+                self.rms_trend.append(rv)
+
+        evts = []
+
+        # sta/lta
+        e = mag * mag
+        for i in range(3):
+            self.sta[i] += (e - self.sta[i]) / self.sta_n[i]
+            self.lta[i] += (e - self.lta[i]) / self.lta_n[i]
+            ratio = self.sta[i] / (self.lta[i] + 1e-30)
+            self.sta_lta_latest[i] = ratio
+            was = self.sta_lta_active[i]
+            if ratio > self.sta_lta_thresh_on[i] and not was:
+                self.sta_lta_active[i] = True
+                evts.append(('STA/LTA', i, ratio, mag))
+            elif ratio < self.sta_lta_thresh_off[i]:
+                self.sta_lta_active[i] = False
+
+        self._sta_dec += 1
+        if self._sta_dec >= max(1, self.fs // 30):
+            self._sta_dec = 0
+            for i in range(3):
+                self.sta_lta_ring[i].append(self.sta_lta_latest[i])
+
+        # cusum
+        self.cusum_mu += 0.0001 * (mag - self.cusum_mu)
+        self.cusum_pos = max(0.0, self.cusum_pos + mag - self.cusum_mu - self.cusum_k)
+        self.cusum_neg = max(0.0, self.cusum_neg - mag + self.cusum_mu - self.cusum_k)
+        self.cusum_val = max(self.cusum_pos, self.cusum_neg)
+        if self.cusum_pos > self.cusum_h:
+            evts.append(('CUSUM', 'pos', self.cusum_pos, mag))
+            self.cusum_pos = 0.0
+        if self.cusum_neg > self.cusum_h:
+            evts.append(('CUSUM', 'neg', self.cusum_neg, mag))
+            self.cusum_neg = 0.0
+
+        # kurtosis
+        self.kurt_buf.append(mag)
+        self._kurt_dec += 1
+        if self._kurt_dec >= 10 and len(self.kurt_buf) >= 50:
+            self._kurt_dec = 0
+            buf = list(self.kurt_buf)
+            n = len(buf)
+            mu = sum(buf) / n
+            m2 = sum((x - mu) ** 2 for x in buf) / n
+            m4 = sum((x - mu) ** 4 for x in buf) / n
+            k = m4 / (m2 * m2 + 1e-30)
+            self.kurtosis = k
+            if k > 6:
+                evts.append(('KURTOSIS', k, mag))
+
+        # peak / mad
+        self.peak_buf.append(mag)
+        if len(self.peak_buf) >= 50 and self.sample_count % 10 == 0:
+            srt = sorted(self.peak_buf)
+            n = len(srt)
+            median = srt[n // 2]
+            mad = sorted(abs(x - median) for x in srt)[n // 2]
+            sigma = 1.4826 * mad + 1e-30
+            self.mad_sigma = sigma
+            self.rms = math.sqrt(sum(x * x for x in self.peak_buf) / n)
+            self.peak = max(abs(x) for x in self.peak_buf)
+            self.crest = self.peak / (self.rms + 1e-30)
+            dev = abs(mag - median) / sigma
+            if dev > 8.0:
+                evts.append(('PEAK', 'majeur', dev, mag))
+            elif dev > 5.0:
+                evts.append(('PEAK', 'fort', dev, mag))
+            elif dev > 3.5:
+                evts.append(('PEAK', 'moyen', dev, mag))
+            elif dev > 2.0:
+                evts.append(('PEAK', 'micro', dev, mag))
+
+        if evts and (t_now - self._last_evt_t) > 0.01:
+            self._last_evt_t = t_now
+            self.event_ts.append(t_now)
+            self._classify(evts, t_now, mag)
+
+    def compute_dwt(self):
+        if not self._dwt_ok or len(self.dwt_buffer) < 64:
+            return
+        n = min(len(self.dwt_buffer), 512)
+        data = list(self.dwt_buffer)[-n:]
+        try:
+            lvl = min(5, self._pywt.dwt_max_level(n, 'db4'))
+            if lvl < 3:
+                return
+            coeffs = self._pywt.wavedec(data, 'db4', level=lvl)
+            want = [5, 4, 3, 2, 1]
+            for j, bi in enumerate(want):
+                if bi < len(coeffs):
+                    d = coeffs[bi]
+                    eng = sum(v * v for v in d) / max(1, len(d))
+                    self.band_energy[j].append(eng)
+                else:
+                    self.band_energy[j].append(0.0)
+        except Exception:
+            pass
+
+    def detect_periodicity(self):
+        if len(self.waveform) < self.fs * 2:
+            self.period = None
+            self.acorr_ring = []
+            return
+        buf = list(self.waveform)[-self.fs * 5:]
+        n = len(buf)
+        mean = sum(buf) / n
+        centered = [x - mean for x in buf]
+        var = sum(x * x for x in centered)
+        if var < 1e-20:
+            self.period = None
+            self.acorr_ring = []
+            return
+        min_lag = max(5, int(self.fs * 0.05))
+        max_lag = min(n // 2, int(self.fs * 2.5))
+        acorr = []
+        for lag in range(min_lag, max_lag):
+            s = sum(centered[i] * centered[i + lag] for i in range(n - lag))
+            acorr.append(s / var)
+        self.acorr_ring = acorr
+        if not acorr:
+            self.period = None
+            return
+        best_i = max(range(len(acorr)), key=lambda i: acorr[i])
+        best_val = acorr[best_i]
+        best_lag = min_lag + best_i
+        if best_val > 0.1:
+            self.period = best_lag / self.fs
+            self.period_freq = self.fs / best_lag
+            self.period_cv = max(0.0, 1.0 - best_val)
+            self.period_std = self.period * self.period_cv
+        else:
+            self.period = None
+            self.period_freq = None
+            self.period_cv = None
+            self.period_std = None
+
+    def detect_heartbeat(self):
+        min_n = self.fs * 5
+        if len(self.hr_buf) < min_n:
+            self.hr_bpm = None
+            self.hr_confidence = 0.0
+            return
+        buf = list(self.hr_buf)[-self.fs * 10:]
+        n = len(buf)
+        mean = sum(buf) / n
+        centered = [x - mean for x in buf]
+        var = sum(x * x for x in centered)
+        if var < 1e-20:
+            self.hr_bpm = None
+            self.hr_confidence = 0.0
+            return
+        lag_lo = int(self.fs * 0.3)
+        lag_hi = min(int(self.fs * 1.0), n // 2)
+        if lag_lo >= lag_hi:
+            self.hr_bpm = None
+            self.hr_confidence = 0.0
+            return
+        best_r = -1.0
+        best_lag = lag_lo
+        for lag in range(lag_lo, lag_hi):
+            s = sum(centered[i] * centered[i + lag] for i in range(n - lag))
+            r = s / var
+            if r > best_r:
+                best_r = r
+                best_lag = lag
+        if best_r > 0.15:
+            self.hr_bpm = 60.0 / (best_lag / self.fs)
+            self.hr_confidence = min(1.0, best_r)
+        else:
+            self.hr_bpm = None
+            self.hr_confidence = 0.0
+
+    def _classify(self, detections, t, amp):
+        sources = set(d[0] for d in detections)
+        ns = len(sources)
+
+        if ns >= 4 and amp > 0.05:
+            sev, sym, lbl = 'CHOC_MAJEUR', '★', 'MAJOR'
+        elif ns >= 3 and amp > 0.02:
+            sev, sym, lbl = 'CHOC_MOYEN', '▲', 'shock'
+        elif 'PEAK' in sources and amp > 0.005:
+            sev, sym, lbl = 'MICRO_CHOC', '△', 'micro-choc'
+        elif ('STA/LTA' in sources or 'CUSUM' in sources) and amp > 0.003:
+            sev, sym, lbl = 'VIBRATION', '●', 'vibration'
+        elif amp > 0.001:
+            sev, sym, lbl = 'VIB_LEGERE', '○', 'light-vib'
+        else:
+            sev, sym, lbl = 'MICRO_VIB', '·', 'micro-vib'
+
+        bands = []
+        for j in range(5):
+            if self.band_energy[j]:
+                recent = list(self.band_energy[j])[-3:]
+                if sum(recent) / len(recent) > 1e-10:
+                    bands.append(self.band_labels[j].strip())
+
+        self.events.append({
+            'time': t,
+            'tstr': datetime.datetime.fromtimestamp(t).strftime('%H:%M:%S.%f')[:11],
+            'sev': sev, 'sym': sym, 'lbl': lbl,
+            'amp': amp,
+            'src': list(sources),
+            'nsrc': ns,
+            'bands': bands,
+        })
+
+
+# --- terminal ui ---
+
+W = 76
+BLOCKS = ' ▁▂▃▄▅▆▇█'
+
+
+def _vlen(s):
+    return len(_ANSI_RE.sub('', s))
+
+
+def _sparkline(data, width, ceil=None):
+    if not data:
+        return ' ' * width
+    d = list(data)
+    if len(d) < width:
+        d = [0.0] * (width - len(d)) + d
+    elif len(d) > width:
+        d = d[-width:]
+    if ceil is None or ceil <= 0:
+        ceil = max(abs(v) for v in d) if d else 1.0
+    if ceil <= 0:
+        ceil = 1.0
+    out = []
+    for v in d:
+        frac = min(1.0, abs(v) / ceil)
+        out.append(BLOCKS[min(8, int(frac * 8))])
+    return ''.join(out)
+
+
+def _spec_row(data, width, floor_db=-60, ceil_db=-10):
+    chars = ' ·░▒▓█'
+    if not data:
+        return ' ' * width
+    d = list(data)
+    if len(d) < width:
+        d = [0.0] * (width - len(d)) + d
+    elif len(d) > width:
+        d = d[-width:]
+    out = []
+    rng = ceil_db - floor_db
+    for e in d:
+        if e <= 0:
+            out.append(' ')
+            continue
+        db = 10 * math.log10(e + 1e-20)
+        frac = max(0.0, min(1.0, (db - floor_db) / rng))
+        out.append(chars[min(5, int(frac * 5))])
+    return ''.join(out)
+
+
+def _sev_color(sev):
+    return {
+        'CHOC_MAJEUR': f'{BRED}{BOLD}',
+        'CHOC_MOYEN': RED,
+        'MICRO_CHOC': CYN,
+        'VIBRATION': YEL,
+        'VIB_LEGERE': GRN,
+        'MICRO_VIB': DIM,
+    }.get(sev, DIM)
+
+
+def _line(content):
+    vl = _vlen(content)
+    pad = max(0, W - vl)
+    return f"{DIM}│{RST}{content}{' ' * pad}{DIM}│{RST}"
+
+
+def _sep(label=''):
+    if label:
+        rest = W - len(label) - 2
+        return f"{DIM}├─{label}{'─' * rest}┤{RST}"
+    return f"{DIM}├{'─' * W}┤{RST}"
+
+
+def _downsample(data, width):
+    n = len(data)
+    if n <= width:
+        return list(data)
+    step = n / width
+    out = []
+    for c in range(width):
+        s_i = int(c * step)
+        e_i = int((c + 1) * step)
+        chunk = data[s_i:e_i]
+        out.append(max(chunk) if chunk else 0.0)
+    return out
+
+
+def render(det, t_start, restarts):
+    el = time.time() - t_start
+    rate = det.sample_count / el if el > 1 else 0
+    now = time.time()
+
+    L = []
+    a = L.append
+
+    top_bar = '─' * (W - len(' VIBRATION DETECTOR ') - 1)
+    a(f"{DIM}┌─ VIBRATION DETECTOR {top_bar}┐{RST}")
+
+    hdr = (f" {DIM}{el:>7.1f}s{RST}  {det.sample_count:>10,} smp  "
+           f"{BWHT}{rate:>.0f}{RST} Hz  "
+           f"R:{restarts}  Ev:{len(det.events)}")
+    a(_line(hdr))
+
+    GW = W - 4
+
+    a(_sep(' Waveform |a_dyn| 5s '))
+    wd = list(det.waveform)
+    if wd:
+        mx = max(max(abs(v) for v in wd), 0.0002)
+        ds = _downsample(wd, GW)
+        a(_line(f"  {GRN}{_sparkline(ds, GW, mx)}{RST}"))
+        a(_line(f"  {DIM}{mx:.5f}g{' ' * (GW - 22)}0g{RST}"))
+    else:
+        a(_line(f"  {DIM}waiting...{RST}"))
+        a(_line(''))
+
+    a(_sep(' Axes X / Y / Z (5s) '))
+    xyz = list(det.waveform_xyz)
+    AW = GW - 4
+    if xyz:
+        xs = [t[0] for t in xyz]
+        ys = [t[1] for t in xyz]
+        zs = [t[2] for t in xyz]
+        amx = max(max(abs(v) for v in xs + ys + zs), 0.0001)
+        a(_line(f"  {RED}X{RST} {_sparkline(_downsample(xs, AW), AW, amx)}{RST}"))
+        a(_line(f"  {GRN}Y{RST} {_sparkline(_downsample(ys, AW), AW, amx)}{RST}"))
+        a(_line(f"  {CYN}Z{RST} {_sparkline(_downsample(zs, AW), AW, amx)}{RST}"))
+    else:
+        for ax_l in ('X', 'Y', 'Z'):
+            a(_line(f"  {DIM}{ax_l}{RST}"))
+
+    a(_sep(' Spectrogram DWT 5s '))
+    SW = W - 10
+    has_dwt = det._dwt_ok and any(len(b) > 0 for b in det.band_energy)
+    if has_dwt:
+        for j in range(5):
+            row = _spec_row(list(det.band_energy[j]), SW)
+            a(_line(f" {DIM}{det.band_labels[j]}{RST} {CYN}{row}{RST}"))
+    else:
+        msg = 'pip install PyWavelets' if not det._dwt_ok else 'accumulating...'
+        a(_line(f"  {DIM}{msg}{RST}"))
+        for _ in range(4):
+            a(_line(''))
+
+    a(_sep(' RMS trend 10s '))
+    if det.rms_trend:
+        a(_line(f"  {YEL}{_sparkline(list(det.rms_trend), GW)}{RST}"))
+    else:
+        a(_line(f"  {DIM}accumulating...{RST}"))
+
+    a(_sep(' Detectors '))
+    DW = 25
+    names = ['fast', 'med ', 'slow']
+    for i in range(3):
+        sp = _sparkline(list(det.sta_lta_ring[i]), DW,
+                        ceil=det.sta_lta_thresh_on[i] * 2)
+        r = det.sta_lta_latest[i]
+        thr = det.sta_lta_thresh_on[i]
+        mark = '*' if r > thr else ' '
+        col = BRED if r > thr else DIM
+        if i == 0:
+            extra = f"  K:{det.kurtosis:>5.1f}  CF:{det.crest:>5.1f}"
+        elif i == 1:
+            extra = f"  CUSUM:{det.cusum_val:>8.4f}"
+        else:
+            extra = f"  RMS:{det.rms:.5f}g Pk:{det.peak:.5f}g"
+        a(_line(f" {DIM}STA {names[i]}{RST} {YEL}{sp}{RST}"
+                f" {col}{r:>5.1f}{mark}{RST}{extra}"))
+
+    a(_sep(' Autocorrelation (lag 0.05-2.5s) '))
+    if det.acorr_ring:
+        ac_ceil = max(0.05, max(abs(v) for v in det.acorr_ring) * 1.2)
+        a(_line(f"  {BCYN}{_sparkline(det.acorr_ring, GW, ceil=ac_ceil)}{RST}"))
+    else:
+        a(_line(f"  {DIM}accumulating...{RST}"))
+
+    a(_sep(' Pattern '))
+    if det.period is not None and det.period_cv is not None and det.period_cv < 0.5:
+        reg = max(0, min(100, int((1.0 - det.period_cv) * 100)))
+        a(_line(f" Period:{det.period:.3f}s ±{det.period_std:.3f}"
+                f"  Freq:{det.period_freq:.2f}Hz  Reg:{reg}%"))
+        syms = ''.join(f"──{e['sym']}" for e in list(det.events)[-12:])
+        a(_line(f" {DIM}{syms}──{RST}"))
+    else:
+        a(_line(f" {DIM}no regular pattern detected{RST}"))
+        a(_line(''))
+
+    a(_sep(' Heartbeat BCG '))
+    if det.hr_bpm is not None and det.hr_confidence > 0.15:
+        bpm = det.hr_bpm
+        conf = int(det.hr_confidence * 100)
+        period_s = 60.0 / bpm
+        phase = (now % period_s) < (period_s * 0.3)
+        heart = f"{BRED}♥{RST}" if phase else f"{DIM}♡{RST}"
+        a(_line(f" {heart} {BRED}{BOLD}{bpm:>5.1f} BPM{RST}"
+                f"   confidence: {conf}%   band: 0.8-3Hz"))
+        n_beats = max(1, int(GW / 3))
+        beat_line = ''
+        for b in range(n_beats):
+            bp = ((now + b * period_s * 0.3) % period_s) < (period_s * 0.3)
+            beat_line += f"{BRED}♥{RST}─" if bp else f"{DIM}♡{RST}─"
+        a(_line(f" {beat_line}"))
+    else:
+        a(_line(f" {DIM}no heartbeat detected (rest wrists on laptop){RST}"))
+        a(_line(''))
+
+    a(_sep(' Events '))
+    recent = list(det.events)[-5:]
+    for ev in reversed(recent):
+        c = _sev_color(ev['sev'])
+        bands = ','.join(ev['bands'][:3]) if ev['bands'] else '-'
+        a(_line(f" {DIM}{ev['tstr']}{RST} {c}{ev['sym']} {ev['lbl']:<11}{RST}"
+                f" {ev['amp']:.5f}g {bands}"))
+    for _ in range(max(0, 3 - len(recent))):
+        a(_line(''))
+
+    a(_sep())
+    ax, ay, az = det.latest_raw
+    a(_line(f" X:{ax:>+10.6f}g Y:{ay:>+10.6f}g Z:{az:>+10.6f}g"
+            f"  |g|:{det.latest_mag:.6f}"))
+    a(_line(f" {DIM}ctrl+c to save & quit{RST}"))
+    a(f"{DIM}└{'─' * W}┘{RST}")
+
+    return '\n'.join(L)
+
+
+def main():
+    if os.geteuid() != 0:
+        print(f"\033[91m\033[1m[!] run with: sudo python3 {sys.argv[0]}\033[0m")
+        sys.exit(1)
+
+    try:
+        old = multiprocessing.shared_memory.SharedMemory(name=SHM_NAME, create=False)
+        old.close()
+        old.unlink()
+    except FileNotFoundError:
+        pass
+    shm = multiprocessing.shared_memory.SharedMemory(
+        name=SHM_NAME, create=True, size=SHM_SIZE)
+    for i in range(SHM_SIZE):
+        shm.buf[i] = 0
+
+    running = [True]
+    restart_count = [0]
+
+    def _stop(sig, frame):
+        running[0] = False
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    sys.stdout.write(HIDE_CUR)
+    sys.stdout.flush()
+
+    det = VibrationDetector(fs=100)
+    t_start = time.time()
+    last_total = 0
+    last_draw = 0.0
+    last_dwt = 0.0
+    last_period = 0.0
+    worker = None
+    MAX_BATCH = 200
+
+    try:
+        while running[0]:
+            if worker is None or not worker.is_alive():
+                if worker is not None:
+                    restart_count[0] += 1
+                worker = multiprocessing.Process(
+                    target=sensor_worker,
+                    args=(SHM_NAME, restart_count[0]),
+                    daemon=True)
+                worker.start()
+
+            time.sleep(0.02)
+            now = time.time()
+
+            samples, last_total = shm_read_new(shm.buf, last_total)
+            if len(samples) > MAX_BATCH:
+                samples = samples[-MAX_BATCH:]
+            for (sx, sy, sz) in samples:
+                det.process(sx, sy, sz, now)
+
+            if now - last_dwt >= 0.2:
+                det.compute_dwt()
+                last_dwt = now
+
+            if now - last_period >= 1.0:
+                det.detect_periodicity()
+                det.detect_heartbeat()
+                last_period = now
+
+            if now - last_draw >= 0.1:
+                frame = render(det, t_start, restart_count[0])
+                sys.stdout.write(CLEAR + frame)
+                sys.stdout.flush()
+                last_draw = now
+
+    finally:
+        if worker and worker.is_alive():
+            worker.kill()
+            worker.join(timeout=2)
+
+        sys.stdout.write(SHOW_CUR + '\n')
+        sys.stdout.flush()
+
+        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        logpath = f'vibration_log_{ts}.json'
+        print(f"{DIM}[*] saving {len(det.events)} events to {logpath}{RST}")
+        obj = {
+            'generated': datetime.datetime.now().isoformat(),
+            'restarts': restart_count[0],
+            'total_samples': det.sample_count,
+            'events': [{
+                'time': e['tstr'], 'severity': e['sev'],
+                'amplitude': round(e['amp'], 6),
+                'sources': e['src'], 'bands': e['bands'],
+            } for e in det.events],
+        }
+        with open(logpath, 'w') as f:
+            json.dump(obj, f, indent=1, default=str)
+        print(f"{DIM}[ok] {det.sample_count} samples, "
+              f"{restart_count[0]} restarts{RST}")
+
+        shm.close()
+        shm.unlink()
+
+
+if __name__ == '__main__':
+    main()
