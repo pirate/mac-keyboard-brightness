@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Drive KBPulse keyboard backlight intensity from an MSIG1 signal."""
+
+from __future__ import annotations
+
+import argparse
+import signal
+import sys
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Read MSIG1 mono signal and map its envelope to keyboard brightness."
+    )
+    parser.add_argument(
+        "--send-hz",
+        type=float,
+        default=80.0,
+        help="Maximum KBPulse update rate in Hz.",
+    )
+    parser.add_argument(
+        "--fade-ms",
+        type=int,
+        default=20,
+        help="KBPulse fade duration in milliseconds.",
+    )
+    parser.add_argument(
+        "--gain",
+        type=float,
+        default=1.0,
+        help="Linear gain applied to adaptive envelope before clamping.",
+    )
+    parser.add_argument(
+        "--as-root",
+        action="store_true",
+        help="Run KBPulse as root when this process is root (default: drop to sudo user).",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.send_hz <= 0:
+        raise SystemExit("--send-hz must be > 0")
+
+    try:
+        from toolkit.dsp import AdaptiveLevel
+        from toolkit.hardware import launch_kbpulse_stdin, send_kbpulse_level, stop_kbpulse
+        from toolkit.signal_stream import FloatSignalReader, is_tty_stdin
+    except Exception as exc:
+        raise SystemExit(f"keyboard-brightness dependencies unavailable: {exc}") from exc
+
+    if is_tty_stdin():
+        raise SystemExit("keyboard-brightness expects an MSIG1 stream on stdin")
+
+    reader = FloatSignalReader.from_stdin()
+    leveler = AdaptiveLevel()
+    proc, err = launch_kbpulse_stdin(
+        fade_ms=max(0, int(args.fade_ms)),
+        run_as_user=not args.as_root,
+        start_dir=str(REPO_ROOT),
+    )
+    if proc is None:
+        raise SystemExit(f"failed to start KBPulse: {err}")
+
+    running = True
+    send_dt = 1.0 / float(args.send_hz)
+    dt = 1.0 / float(reader.sample_rate)
+    clock = time.monotonic()
+    next_send = clock
+
+    def _stop(_sig: int, _frame: object) -> None:
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    try:
+        try:
+            chunk_bytes = max(16, int(reader.sample_rate / max(1.0, args.send_hz)) * 4)
+            for chunk in reader.iter_chunks(chunk_bytes=chunk_bytes):
+                if not running:
+                    break
+                if proc.poll() is not None:
+                    raise RuntimeError("KBPulse exited unexpectedly")
+                for sample in chunk:
+                    env = leveler.update(float(sample), dt)
+                    level = max(0.0, min(1.0, env * float(args.gain)))
+                    clock += dt
+                    if clock >= next_send:
+                        if not send_kbpulse_level(proc, level):
+                            raise RuntimeError("failed writing to KBPulse stdin")
+                        next_send = clock + send_dt
+        except RuntimeError as exc:
+            print(f"keyboard-brightness: {exc}", file=sys.stderr)
+            return 1
+    finally:
+        stop_kbpulse(proc, fade_ms=max(0, int(args.fade_ms)))
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

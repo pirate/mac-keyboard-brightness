@@ -1,87 +1,99 @@
 # apple-silicon-accelerometer
 
-More information: [read the article on Medium](https://medium.com/@oli.bourbonnais/your-macbook-has-an-accelerometer-and-you-can-read-it-in-real-time-in-python-28d9395fb180)
+A modular, pipe-able macOS hardware signal toolkit built around 10 binaries in `./bin/`.
 
-reading the undocumented mems accelerometer on apple silicon macbooks via iokit hid
-
-![demo](assets/demo.gif)
-
-## what is this
-
-apple silicon chips (M1/M2/M3/M4) have a hard to find mems accelerometer managed by the sensor processing unit (SPU).
-it's not exposed through any public api or framework.
-this project reads raw 3-axis acceleration data at ~800hz via iokit hid callbacks.
-
-only tested on macbook pro m3 pro so far - might work on other apple silicon macs but no guarantees
-
-## how it works
-
-the sensor lives under AppleSPUHIDDevice in the iokit registry, on vendor usage page 0xFF00, usage 3.
-the driver is AppleSPUHIDDriver which is part of the sensor processing unit.
-we open it with IOHIDDeviceCreate and register an asynchronous callback via IOHIDDeviceRegisterInputReportCallback.
-data comes as 22-byte hid reports with x/y/z as int32 little-endian at byte offsets 6, 10, 14.
-divide by 65536 to get the value in g.
-callback rate is ~100hz
-
-you can verify the device exists on your machine with:
-
-    ioreg -l -w0 | grep -A5 AppleSPUHIDDevice
+The toolkit treats hardware signals as **mono float32 streams** over stdin/stdout so you can chain tools UNIX-style.
 
 ## quick start
 
-    git clone https://github.com/olvvier/apple-silicon-accelerometer
-    cd apple-silicon-accelerometer
-    pip install -r requirements.txt
-    sudo python3 motion_live.py
+```bash
+git clone https://github.com/olvvier/apple-silicon-accelerometer
+cd apple-silicon-accelerometer
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
 
-requires root because iokit hid device access on apple silicon needs elevated privileges
+Run commands directly from repo root, e.g.:
 
-### keyboard flash mode (bundled KBPulse)
+```bash
+./bin/accelerometer | ./bin/visualizer
+```
 
-`motion_live.py` can flash the keyboard backlight from vibration intensity in near realtime.
-the repo now vendors KBPulse, including a prebuilt apple silicon binary at `KBPulse/bin/KBPulse`.
+## stream format
 
-run as usual:
+All streaming commands use this wire format:
 
-    sudo python3 motion_live.py
+- header: `MSIG1 <sample_rate_hz>\n`
+- payload: little-endian float32 mono samples
 
-optional overrides:
+Most commands can also read raw float32 with `--raw --rate <hz>`.
 
-    sudo python3 motion_live.py --no-kbpulse
-    sudo python3 motion_live.py --kbpulse-bin /path/to/KBPulse
+## binaries (10)
 
-## code structure
+- `bin/accelerometer`: live Apple SPU accelerometer stream to stdout (up to 800 Hz, requires `sudo`)
+- `bin/microphone`: live microphone capture to stdout (up to device-supported rates, e.g. 44.1 kHz)
+- `bin/bandpass`: streaming bandpass (same cascaded HP+LP style as `motion_live.py`)
+- `bin/heartbeat`: BPM/confidence estimator from incoming filtered signal (JSON lines)
+- `bin/frequency-shift`: realtime best-effort frequency scaling by scalar factor
+- `bin/volume-shift`: amplitude gain scalar
+- `bin/keyboard-brightness`: maps signal envelope to keyboard backlight via KBPulse
+- `bin/speaker`: plays incoming signal on system audio output
+- `bin/screen-brightness`: maps signal envelope to display brightness
+- `bin/visualizer`: terminal live waveform/level monitor
 
-- spu_sensor.py - the core: iokit bindings, device discovery, hid callback, shared memory ring buffer
-- motion_live.py - vibration detection pipeline, heartbeat bcg, terminal ui, main loop
-- KBPulse/ - vendored keyboard backlight driver code + binary (`KBPulse/bin/KBPulse`)
+## example pipelines
 
-the sensor reading logic is isolated in spu_sensor.py so you can reuse it independently
+Accelerometer heartbeat detection:
 
-## heartbeat demo
+```bash
+sudo ./bin/accelerometer | ./bin/bandpass --low 0.8 --high 3.0 | ./bin/heartbeat
+```
 
-place your wrists on the laptop near the trackpad and wait 10-20 seconds for the signal to stabilize.
-this uses ballistocardiography - the mechanical vibrations from your heartbeat transmitted through your arms into the chassis.
-experimental, not reliable, just a fun use-case to show what the sensor can pick up.
-the bcg bandpass is 0.8-3hz and bpm is estimated via autocorrelation on the filtered signal
+Microphone to keyboard flash:
 
-## notes
+```bash
+./bin/microphone --rate 44100 | ./bin/keyboard-brightness
+```
 
-- experimental / undocumented AppleSPU hid path
-- requires sudo
-- may break on future macos updates
-- use at your own risk
-- not for medical use
+Modular synth-style chain:
 
-## tested on
+```bash
+sudo ./bin/accelerometer \
+  | ./bin/bandpass --low 0.8 --high 3 \
+  | tee >(./bin/keyboard-brightness) \
+  | ./bin/frequency-shift 1000 \
+  | ./bin/volume-shift 0.8 \
+  | ./bin/speaker
+```
 
-- macbook pro m3 pro, macos 15.6.1
-- python 3.14
+Live monitor:
+
+```bash
+./bin/microphone --rate 44100 | ./bin/visualizer
+```
+
+## kbpulse integration
+
+`keyboard-brightness` uses vendored KBPulse (`KBPulse/bin/KBPulse`, included in this repo).
+
+Rebuild that binary (optional):
+
+```bash
+./scripts/rebuild_kbpulse_binary.sh
+```
+
+## permissions and notes
+
+- `accelerometer` requires root due AppleSPU HID access.
+- `keyboard-brightness` and `screen-brightness` require appropriate macOS permissions and supported hardware.
+- `microphone` and `speaker` require an installed `sounddevice` runtime backend (PortAudio).
+- `frequency-shift` is realtime best-effort and intentionally lightweight (artifact-prone at extreme factors).
+
+## legacy tool
+
+`motion_live.py` is still present as a standalone detector/monitor, but the primary interface is now `./bin/*`.
 
 ## license
 
 MIT
-
----
-
-not affiliated with Apple or any employer

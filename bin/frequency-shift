@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Realtime best-effort frequency scaling for mono streamed data."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description=(
+            "Scale frequencies in an MSIG1 float32 mono stream by a factor "
+            "(best-effort chunk-local algorithm)."
+        )
+    )
+    p.add_argument("factor", type=float, help="Frequency multiplier (> 0).")
+    p.add_argument(
+        "--chunk-bytes",
+        type=int,
+        default=16384,
+        help="Read size in bytes (default: 16384).",
+    )
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Read raw float32 input instead of MSIG1 header.",
+    )
+    p.add_argument(
+        "--rate",
+        type=float,
+        default=None,
+        help="Input sample rate Hz (required with --raw).",
+    )
+    return p
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    try:
+        from toolkit.dsp import ChunkFrequencyScaler
+        from toolkit.signal_stream import (
+            FloatSignalReader,
+            FloatSignalWriter,
+            StreamFormatError,
+            install_sigpipe_default,
+        )
+    except ModuleNotFoundError as exc:
+        print(f"error: missing dependency: {exc}", file=sys.stderr)
+        return 2
+
+    install_sigpipe_default()
+
+    if args.factor <= 0:
+        print("error: factor must be > 0", file=sys.stderr)
+        return 2
+    if args.chunk_bytes < 8:
+        print("error: --chunk-bytes must be >= 8", file=sys.stderr)
+        return 2
+
+    try:
+        reader = FloatSignalReader.from_stdin(raw=args.raw, sample_rate=args.rate)
+    except (StreamFormatError, EOFError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    scaler = ChunkFrequencyScaler(factor=args.factor)
+    writer = FloatSignalWriter.to_stdout(sample_rate=reader.sample_rate, raw=False)
+
+    try:
+        for chunk in reader.iter_chunks(chunk_bytes=args.chunk_bytes):
+            writer.write(scaler.process(chunk))
+        writer.flush()
+    except BrokenPipeError:
+        return 0
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

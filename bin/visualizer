@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Terminal waveform and level monitor for streamed mono float32 signal."""
+
+from __future__ import annotations
+
+import argparse
+import math
+import shutil
+import sys
+import time
+from collections import deque
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+CLEAR = "\x1b[2J\x1b[H"
+HOME = "\x1b[H"
+HIDE_CURSOR = "\x1b[?25l"
+SHOW_CURSOR = "\x1b[?25h"
+WAVE_CHARS = " .:-=+*#%@"
+np = None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Render a live TUI waveform + level from an MSIG1 stream."
+    )
+    p.add_argument(
+        "--fps",
+        type=float,
+        default=20.0,
+        help="UI refresh rate (default: 20).",
+    )
+    p.add_argument(
+        "--window-seconds",
+        type=float,
+        default=3.0,
+        help="Visible waveform duration in seconds (default: 3).",
+    )
+    p.add_argument(
+        "--chunk-bytes",
+        type=int,
+        default=16384,
+        help="Read size in bytes (default: 16384).",
+    )
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Read raw float32 input instead of MSIG1 header.",
+    )
+    p.add_argument(
+        "--rate",
+        type=float,
+        default=None,
+        help="Input sample rate Hz (required with --raw).",
+    )
+    return p
+
+
+def format_wave(samples: np.ndarray, width: int) -> str:
+    if width <= 0:
+        return ""
+    if samples.size == 0:
+        return " " * width
+
+    if samples.size == 1:
+        resampled = np.full(width, float(samples[0]), dtype=np.float64)
+    else:
+        x = np.linspace(0.0, samples.size - 1, width, dtype=np.float64)
+        base = np.arange(samples.size, dtype=np.float64)
+        resampled = np.interp(x, base, samples.astype(np.float64, copy=False))
+
+    peak = max(1e-6, float(np.max(np.abs(resampled))))
+    normalized = np.clip((resampled / peak + 1.0) * 0.5, 0.0, 1.0)
+    idx = (normalized * (len(WAVE_CHARS) - 1)).astype(np.int32)
+    return "".join(WAVE_CHARS[i] for i in idx)
+
+
+def render(
+    *,
+    fs: float,
+    samples_seen: int,
+    waveform: deque[float],
+    level_norm: float,
+    rms: float,
+    peak: float,
+    first_frame: bool,
+) -> bool:
+    term_w = max(40, shutil.get_terminal_size(fallback=(100, 30)).columns)
+    wave_w = max(16, term_w - 12)
+    bar_w = max(10, term_w - 30)
+    wf = np.asarray(waveform, dtype=np.float32)
+    wave = format_wave(wf, wave_w)
+    fill = max(0, min(bar_w, int(round(level_norm * bar_w))))
+    bar = "#" * fill + "-" * (bar_w - fill)
+    elapsed = samples_seen / fs if fs > 0 else 0.0
+
+    lines = [
+        f"MSIG visualizer  fs={fs:.1f}Hz  t={elapsed:7.2f}s  samples={samples_seen}",
+        f"wave |{wave}|",
+        f"lvl  [{bar}]  {level_norm:5.2f}",
+        f"rms={rms:10.6f}  peak={peak:10.6f}  (Ctrl-C to quit)",
+    ]
+    screen = "\n".join(lines)
+    prefix = CLEAR + HIDE_CURSOR if first_frame else HOME
+    sys.stdout.write(prefix + screen)
+    sys.stdout.flush()
+    return False
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    global np
+    try:
+        import numpy as np_module
+        from toolkit.dsp import AdaptiveLevel
+        from toolkit.signal_stream import FloatSignalReader, StreamFormatError
+    except ModuleNotFoundError as exc:
+        print(f"error: missing dependency: {exc}", file=sys.stderr)
+        return 2
+    np = np_module
+
+    if args.fps <= 0:
+        print("error: --fps must be > 0", file=sys.stderr)
+        return 2
+    if args.window_seconds <= 0:
+        print("error: --window-seconds must be > 0", file=sys.stderr)
+        return 2
+    if args.chunk_bytes < 4:
+        print("error: --chunk-bytes must be >= 4", file=sys.stderr)
+        return 2
+
+    try:
+        reader = FloatSignalReader.from_stdin(raw=args.raw, sample_rate=args.rate)
+    except (StreamFormatError, EOFError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    hist = deque(maxlen=max(32, int(reader.sample_rate * args.window_seconds)))
+    level = AdaptiveLevel()
+    samples_seen = 0
+    first_frame = True
+    last_draw = 0.0
+    draw_dt = 1.0 / args.fps
+    level_norm = 0.0
+    rms = 0.0
+    peak = 0.0
+
+    try:
+        for chunk in reader.iter_chunks(chunk_bytes=args.chunk_bytes):
+            if chunk.size == 0:
+                continue
+            samples_seen += int(chunk.size)
+            hist.extend(float(s) for s in chunk)
+            chunk64 = chunk.astype(np.float64, copy=False)
+            rms = float(math.sqrt(float(np.mean(chunk64 * chunk64))))
+            peak = float(np.max(np.abs(chunk)))
+            dt = float(chunk.size / reader.sample_rate)
+            level_norm = level.update(float(peak), dt)
+
+            now = time.monotonic()
+            if now - last_draw >= draw_dt:
+                first_frame = render(
+                    fs=reader.sample_rate,
+                    samples_seen=samples_seen,
+                    waveform=hist,
+                    level_norm=level_norm,
+                    rms=rms,
+                    peak=peak,
+                    first_frame=first_frame,
+                )
+                last_draw = now
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if samples_seen > 0:
+            render(
+                fs=reader.sample_rate,
+                samples_seen=samples_seen,
+                waveform=hist,
+                level_norm=level_norm,
+                rms=rms,
+                peak=peak,
+                first_frame=first_frame,
+            )
+        sys.stdout.write("\n" + SHOW_CURSOR)
+        sys.stdout.flush()
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

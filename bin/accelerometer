@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Stream Apple SPU accelerometer as MSIG1 float32 mono."""
+
+from __future__ import annotations
+
+import argparse
+import math
+import multiprocessing
+from multiprocessing import shared_memory
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+NATIVE_RATE_HZ = 800.0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Read Apple SPU accelerometer and write MSIG1 float32 mono to stdout."
+    )
+    parser.add_argument(
+        "--rate",
+        type=float,
+        default=800.0,
+        help="Target output sample rate in Hz (0 < rate <= 800).",
+    )
+    parser.add_argument(
+        "--axis",
+        choices=("x", "y", "z", "mag"),
+        default="mag",
+        help="Axis to output as mono signal (default: mag).",
+    )
+    return parser.parse_args()
+
+
+def require_root() -> None:
+    if os.geteuid() != 0:
+        prog = Path(sys.argv[0]).name
+        raise SystemExit(f"{prog}: requires root. Run with: sudo {sys.argv[0]}")
+
+
+def pick_axis(xyz: np.ndarray, axis: str) -> np.ndarray:
+    import numpy as np
+
+    if axis == "x":
+        return xyz[:, 0]
+    if axis == "y":
+        return xyz[:, 1]
+    if axis == "z":
+        return xyz[:, 2]
+    energy = np.sum(xyz * xyz, axis=1, dtype=np.float32)
+    return np.sqrt(energy, out=np.empty(energy.shape, dtype=np.float32))
+
+
+def main() -> int:
+    args = parse_args()
+    if args.rate <= 0 or args.rate > NATIVE_RATE_HZ:
+        raise SystemExit("--rate must satisfy: 0 < rate <= 800")
+
+    try:
+        import numpy as np
+    except Exception as exc:
+        raise SystemExit(f"numpy is required: {exc}") from exc
+
+    try:
+        from spu_sensor import SHM_SIZE, sensor_worker, shm_read_new
+        from toolkit.dsp import LinearResampler
+        from toolkit.signal_stream import FloatSignalWriter
+    except Exception as exc:
+        raise SystemExit(f"accelerometer dependencies unavailable: {exc}") from exc
+
+    require_root()
+
+    decimate = max(1, int(math.floor(NATIVE_RATE_HZ / float(args.rate))))
+    worker_rate = NATIVE_RATE_HZ / float(decimate)
+    needs_resample = abs(worker_rate - args.rate) > 1e-6
+    resampler = LinearResampler(worker_rate, float(args.rate)) if needs_resample else None
+
+    shm = shared_memory.SharedMemory(create=True, size=SHM_SIZE)
+    shm.buf[:] = b"\x00" * SHM_SIZE
+    worker: multiprocessing.Process | None = None
+    last_total = 0
+    running = True
+    writer = FloatSignalWriter.to_stdout(sample_rate=float(args.rate))
+
+    def _stop(_sig: int, _frame: object) -> None:
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    try:
+        worker = multiprocessing.Process(
+            target=sensor_worker,
+            args=(shm.name, 0, decimate),
+            daemon=True,
+        )
+        worker.start()
+
+        while running:
+            if worker.exitcode is not None:
+                raise RuntimeError(f"sensor worker exited with code {worker.exitcode}")
+
+            samples, last_total = shm_read_new(shm.buf, last_total)
+            if not samples:
+                time.sleep(0.002)
+                continue
+
+            xyz = np.asarray(samples, dtype=np.float32)
+            mono = pick_axis(xyz, args.axis)
+            out = resampler.process(mono) if resampler is not None else mono
+            if out.size:
+                writer.write(out)
+                writer.flush()
+
+    except BrokenPipeError:
+        pass
+    except RuntimeError as exc:
+        print(f"accelerometer: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if worker is not None and worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=1.0)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=1.0)
+        shm.close()
+        try:
+            shm.unlink()
+        except FileNotFoundError:
+            pass
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

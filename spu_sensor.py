@@ -50,7 +50,7 @@ def shm_read_new(buf, last_total):
     return samples, total
 
 
-def sensor_worker(shm_name, restart_count):
+def sensor_worker(shm_name, restart_count, decimate=8):
     _iokit = ctypes.cdll.LoadLibrary(ctypes.util.find_library('IOKit'))
     _cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library('CoreFoundation'))
 
@@ -119,17 +119,17 @@ def sensor_worker(shm_name, restart_count):
         ctypes.POINTER(ctypes.c_uint8), ctypes.c_long,
     )
 
-    decimate = [0]
+    decimate_ctr = [0]
 
     def on_report(ctx, result, sender, rtype, rid, rpt, length):
         try:
             # 22-byte reports: accel x/y/z as i32 at offsets 6,10,14
             # ~800hz native, we keep 1 in 8 -> ~100hz
             if length == 22:
-                decimate[0] += 1
-                if decimate[0] < 8:
+                decimate_ctr[0] += 1
+                if decimate_ctr[0] < max(1, int(decimate)):
                     return
-                decimate[0] = 0
+                decimate_ctr[0] = 0
                 data = bytes(rpt[:22])
                 x = struct.unpack('<i', data[6:10])[0]
                 y = struct.unpack('<i', data[10:14])[0]
