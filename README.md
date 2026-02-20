@@ -36,10 +36,25 @@ you can verify the device exists on your machine with:
 
 requires root because iokit hid device access on apple silicon needs elevated privileges
 
+### keyboard flash mode (bundled KBPulse)
+
+`motion_live.py` can flash the keyboard backlight from vibration intensity in near realtime.
+the repo now vendors KBPulse, including a prebuilt apple silicon binary at `KBPulse/bin/KBPulse`.
+
+run as usual:
+
+    sudo python3 motion_live.py
+
+optional overrides:
+
+    sudo python3 motion_live.py --no-kbpulse
+    sudo python3 motion_live.py --kbpulse-bin /path/to/KBPulse
+
 ## code structure
 
 - spu_sensor.py - the core: iokit bindings, device discovery, hid callback, shared memory ring buffer
 - motion_live.py - vibration detection pipeline, heartbeat bcg, terminal ui, main loop
+- KBPulse/ - vendored keyboard backlight driver code + binary (`KBPulse/bin/KBPulse`)
 
 the sensor reading logic is isolated in spu_sensor.py so you can reuse it independently
 

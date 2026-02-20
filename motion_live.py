@@ -14,6 +14,9 @@ import json
 import signal
 import math
 import datetime
+import shutil
+import subprocess
+import pwd
 import multiprocessing
 import multiprocessing.shared_memory
 from collections import deque
@@ -145,7 +148,7 @@ class VibrationDetector:
             self.hp_ready = True
             self.waveform.append(0.0)
             self.dwt_buffer.append(0.0)
-            return
+            return 0.0
 
         a = self.hp_alpha
         hx = a * (self.hp_prev_out[0] + ax - self.hp_prev_raw[0])
@@ -250,6 +253,8 @@ class VibrationDetector:
             self._last_evt_t = t_now
             self.event_ts.append(t_now)
             self._classify(evts, t_now, mag)
+
+        return mag
 
     def compute_dwt(self):
         if not self._dwt_ok or len(self.dwt_buffer) < 64:
@@ -381,6 +386,174 @@ class VibrationDetector:
         })
 
 
+class KeyboardFlashBridge:
+    def __init__(self, enabled=True, binary_override=None, fade_ms=20, send_hz=80, run_as_user=True):
+        self.enabled = enabled
+        self.binary_override = binary_override
+        self.fade_ms = max(0, int(fade_ms))
+        self.send_dt = 1.0 / max(1.0, float(send_hz))
+        self.run_as_user = run_as_user
+
+        self.proc = None
+        self.state = 'off'
+        self.err = ''
+        self.bin_path = None
+        self.run_user = None
+
+        self.level = 0.0
+        self._last_update = None
+        self._next_send = 0.0
+        self._last_sent = -1.0
+
+        self._noise = 0.0002
+        self._peak = 0.0015
+        self._decay_per_s = 7.0
+
+    def _resolve_binary(self):
+        candidates = []
+        if self.binary_override:
+            candidates.append(self.binary_override)
+        env_bin = os.environ.get('KBPULSE_BIN')
+        if env_bin:
+            candidates.append(env_bin)
+
+        cwd = os.getcwd()
+        base = os.path.dirname(os.path.abspath(__file__))
+        candidates.extend([
+            os.path.join(cwd, 'KBPulse', 'bin', 'KBPulse'),
+            os.path.join(base, 'KBPulse', 'bin', 'KBPulse'),
+            os.path.join(base, '.localbin', 'KBPulse'),
+            os.path.join(base, 'KBPulse', 'build', 'Release', 'KBPulse'),
+            os.path.join(base, 'KBPulse', 'build', 'Debug', 'KBPulse'),
+            os.path.join(base, 'KBPulse', 'KBPulse'),
+            shutil.which('KBPulse'),
+            shutil.which('kbpulse'),
+        ])
+
+        for c in candidates:
+            if not c:
+                continue
+            if os.path.isfile(c) and os.access(c, os.X_OK):
+                return c
+        return None
+
+    def start(self):
+        if not self.enabled:
+            self.state = 'disabled'
+            return
+
+        bin_path = self._resolve_binary()
+        if not bin_path:
+            self.enabled = False
+            self.state = 'missing'
+            self.err = 'set KBPULSE_BIN or build KBPulse'
+            return
+
+        self.bin_path = bin_path
+        cmd = [bin_path, '--stdin-intensity', '--fade-ms', str(self.fade_ms)]
+        sudo_user = os.environ.get('SUDO_USER')
+        if self.run_as_user and os.geteuid() == 0 and sudo_user and sudo_user != 'root':
+            try:
+                pwd.getpwnam(sudo_user)
+                cmd = ['sudo', '-u', sudo_user] + cmd
+                self.run_user = sudo_user
+            except KeyError:
+                self.run_user = None
+
+        try:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            self.state = 'on'
+        except Exception as e:
+            self.enabled = False
+            self.state = 'error'
+            self.err = str(e)
+
+    def _write_level(self, value, t_now):
+        if not self.proc or not self.proc.stdin:
+            return
+        try:
+            self.proc.stdin.write(f'{value:.4f}\n')
+            self.proc.stdin.flush()
+            self._last_sent = value
+            self._next_send = t_now + self.send_dt
+        except Exception as e:
+            self.enabled = False
+            self.state = 'broken-pipe'
+            self.err = str(e)
+
+    def update(self, mag, t_now):
+        if not self.enabled or self.proc is None:
+            return
+        if self.proc.poll() is not None:
+            self.enabled = False
+            self.state = 'stopped'
+            if self.proc.stderr:
+                try:
+                    self.err = (self.proc.stderr.read() or '').strip()[:120]
+                except Exception:
+                    pass
+            return
+
+        if self._last_update is None:
+            dt = 0.0
+        else:
+            dt = max(0.0, t_now - self._last_update)
+        self._last_update = t_now
+
+        self._noise += 0.002 * (mag - self._noise)
+        if mag > self._peak:
+            self._peak += 0.15 * (mag - self._peak)
+        else:
+            self._peak += 0.01 * (mag - self._peak)
+
+        span = max(1e-6, self._peak - self._noise)
+        norm = (mag - self._noise) / span
+        norm = max(0.0, min(1.0, norm))
+
+        pulse = norm ** 0.65
+        decay = math.exp(-self._decay_per_s * dt) if dt > 0 else 1.0
+        self.level = max(pulse, self.level * decay)
+
+        if t_now < self._next_send:
+            return
+
+        self._write_level(self.level, t_now)
+
+    def status(self):
+        if self.state == 'on':
+            user = self.run_user or 'root'
+            return f'KBPulse:on({user}) lvl:{self.level:0.2f} fade:{self.fade_ms}ms'
+        if self.err:
+            return f'KBPulse:{self.state} ({self.err[:34]})'
+        return f'KBPulse:{self.state}'
+
+    def stop(self):
+        if not self.proc:
+            return
+        self._write_level(0.0, time.time())
+        try:
+            if self.proc.stdin:
+                self.proc.stdin.close()
+        except Exception:
+            pass
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=0.4)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+        if self.state == 'on':
+            self.state = 'off'
+
+
 # --- terminal ui ---
 
 W = 76
@@ -469,7 +642,7 @@ def _downsample(data, width):
     return out
 
 
-def render(det, t_start, restarts):
+def render(det, t_start, restarts, kbflash=None):
     el = time.time() - t_start
     rate = det.sample_count / el if el > 1 else 0
     now = time.time()
@@ -602,6 +775,8 @@ def render(det, t_start, restarts):
     ax, ay, az = det.latest_raw
     a(_line(f" X:{ax:>+10.6f}g Y:{ay:>+10.6f}g Z:{az:>+10.6f}g"
             f"  |g|:{det.latest_mag:.6f}"))
+    if kbflash is not None:
+        a(_line(f" {DIM}{kbflash.status()}{RST}"))
     a(_line(f" {DIM}ctrl+c to save & quit{RST}"))
     a(f"{DIM}└{'─' * W}┘{RST}")
 
@@ -609,6 +784,24 @@ def render(det, t_start, restarts):
 
 
 def main():
+    use_kbpulse = True
+    kbpulse_bin = None
+    kbpulse_as_root = False
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == '--no-kbpulse':
+            use_kbpulse = False
+        elif arg == '--kbpulse-bin' and i + 1 < len(sys.argv):
+            kbpulse_bin = sys.argv[i + 1]
+            i += 1
+        elif arg == '--kbpulse-as-root':
+            kbpulse_as_root = True
+        elif arg in ('-h', '--help'):
+            print(f'usage: sudo python3 {sys.argv[0]} [--no-kbpulse] [--kbpulse-bin /path/to/KBPulse] [--kbpulse-as-root]')
+            return
+        i += 1
+
     if os.geteuid() != 0:
         print(f"\033[91m\033[1m[!] run with: sudo python3 {sys.argv[0]}\033[0m")
         sys.exit(1)
@@ -643,6 +836,14 @@ def main():
     last_period = 0.0
     worker = None
     MAX_BATCH = 200
+    kbflash = KeyboardFlashBridge(
+        enabled=use_kbpulse,
+        binary_override=kbpulse_bin,
+        fade_ms=20,
+        send_hz=80,
+        run_as_user=(not kbpulse_as_root),
+    )
+    kbflash.start()
 
     try:
         while running[0]:
@@ -655,14 +856,17 @@ def main():
                     daemon=True)
                 worker.start()
 
-            time.sleep(0.02)
+            time.sleep(0.005)
             now = time.time()
 
             samples, last_total = shm_read_new(shm.buf, last_total)
             if len(samples) > MAX_BATCH:
                 samples = samples[-MAX_BATCH:]
-            for (sx, sy, sz) in samples:
-                det.process(sx, sy, sz, now)
+            n_samples = len(samples)
+            for idx, (sx, sy, sz) in enumerate(samples):
+                t_sample = now - (n_samples - idx - 1) / det.fs
+                dyn_mag = det.process(sx, sy, sz, t_sample)
+                kbflash.update(dyn_mag, t_sample)
 
             if now - last_dwt >= 0.2:
                 det.compute_dwt()
@@ -674,12 +878,14 @@ def main():
                 last_period = now
 
             if now - last_draw >= 0.1:
-                frame = render(det, t_start, restart_count[0])
+                frame = render(det, t_start, restart_count[0], kbflash=kbflash)
                 sys.stdout.write(CLEAR + frame)
                 sys.stdout.flush()
                 last_draw = now
 
     finally:
+        kbflash.stop()
+
         if worker and worker.is_alive():
             worker.kill()
             worker.join(timeout=2)
