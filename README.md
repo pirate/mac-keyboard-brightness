@@ -1,6 +1,6 @@
 # apple-silicon-accelerometer
 
-A modular, pipe-able macOS hardware signal toolkit with runnable binaries in `./bin/`.
+A modular, pipe-able macOS hardware signal toolkit with runnable commands at repo top-level.
 
 Everything speaks one stream format so tools can be mixed freely in UNIX pipelines.
 
@@ -12,7 +12,7 @@ cd apple-silicon-accelerometer
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements.txt
-export PATH="$PWD/bin:$PATH"
+export PATH="$PWD:$PATH"
 ```
 
 ## stream model
@@ -150,7 +150,7 @@ sudo accelerometer \
 
 ## legacy script
 
-`motion_live.py` remains available, but primary usage is `./bin/*`.
+`motion_live.py` remains available, but primary usage is top-level commands in this repo.
 
 ## license
 
