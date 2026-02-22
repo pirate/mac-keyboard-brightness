@@ -195,11 +195,11 @@ It's fun. Here are some ideas to get started:
 
 - https://github.com/olvvier/apple-silicon-accelerometer IOReg accelerometer reading code
 - https://github.com/EthanRDoesMC/KBPulse/ keyboard brightness code for M1, M2, M3, etc. macs
-- https://github.com/maxmouchet/LightKit control keyboard and screen brightness via Swift
-- https://github.com/tcr/macbook-brightness (the core brightness code is copied from @tcr's, but separated into two cli utils)
+- https://github.com/maxmouchet/LightKit
+- https://github.com/tcr/macbook-brightness
 - http://stackoverflow.com/questions/3239749/programmatically-change-mac-display-brightness
 - https://web.archive.org/web/20110828210316/http://mattdanger.net:80/2008/12/adjust-mac-os-x-display-brightness-from-the-terminal/
 - http://osxbook.com/book/bonus/chapter10/light/
 - https://github.com/samnung/maclight/blob/master/lights_handle.cpp
-- http://www.keindesign.de/stefan/Web/Sites/iWeb/Site/iSpazz.html
+- http://www.keindesign.de/stefan/Web/Sites/iWeb/Site/iSpazz.html the OG
 - https://github.com/bhoeting/DiscoKeyboard
