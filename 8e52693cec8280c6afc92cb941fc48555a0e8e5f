@@ -1,0 +1,25 @@
+README.md
+  94f9d54350729099 42
+metronome
+  94f9d54350729099 419-424,464,494-495,497-498,501-502,504-506,508,599,605-606,809,815,817-819,821,842-843,868-869
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "8e52693cec8280c6afc92cb941fc48555a0e8e5f",
+  "prompts": {
+    "94f9d54350729099": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019c7eeb-8c93-78b2-8937-53b2c1e3bb2b",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>",
+      "messages": [],
+      "total_additions": 35,
+      "total_deletions": 12,
+      "accepted_lines": 31,
+      "overriden_lines": 0
+    }
+  }
+}
