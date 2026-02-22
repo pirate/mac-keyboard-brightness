@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Stream a mono signal through a cascaded realtime bandpass filter."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Apply a realtime bandpass to an MSIG1 float32 mono stream."
+    )
+    p.add_argument(
+        "low_pos",
+        nargs="?",
+        type=float,
+        default=None,
+        help="Low cutoff in Hz (positional shorthand).",
+    )
+    p.add_argument(
+        "high_pos",
+        nargs="?",
+        type=float,
+        default=None,
+        help="High cutoff in Hz (positional shorthand).",
+    )
+    p.add_argument(
+        "--low",
+        type=float,
+        default=None,
+        help="Low cutoff in Hz (default: 0.8).",
+    )
+    p.add_argument(
+        "--high",
+        type=float,
+        default=None,
+        help="High cutoff in Hz (default: 3.0).",
+    )
+    p.add_argument(
+        "--chunk-bytes",
+        type=int,
+        default=16384,
+        help="Read size in bytes (default: 16384).",
+    )
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Read raw float32 input instead of MSIG1 header.",
+    )
+    p.add_argument(
+        "--rate",
+        type=float,
+        default=None,
+        help="Input sample rate Hz (required with --raw).",
+    )
+    return p
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    try:
+        from toolkit.dsp import CascadedBandpass
+        from toolkit.signal_stream import (
+            FloatSignalReader,
+            FloatSignalWriter,
+            StreamFormatError,
+            install_sigpipe_default,
+        )
+    except ModuleNotFoundError as exc:
+        print(f"error: missing dependency: {exc}", file=sys.stderr)
+        return 2
+
+    install_sigpipe_default()
+
+    low = args.low if args.low is not None else (args.low_pos if args.low_pos is not None else 0.8)
+    high = args.high if args.high is not None else (args.high_pos if args.high_pos is not None else 3.0)
+    if low <= 0 or high <= low:
+        print("error: require 0 < --low < --high", file=sys.stderr)
+        return 2
+    if args.chunk_bytes < 4:
+        print("error: --chunk-bytes must be >= 4", file=sys.stderr)
+        return 2
+
+    try:
+        reader = FloatSignalReader.from_stdin(raw=args.raw, sample_rate=args.rate)
+    except EOFError:
+        return 0
+    except StreamFormatError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    nyquist = 0.5 * reader.sample_rate
+    if high >= nyquist:
+        print(
+            f"error: --high must be < Nyquist ({nyquist:.3f} Hz at {reader.sample_rate:.1f} Hz)",
+            file=sys.stderr,
+        )
+        return 2
+
+    filt = CascadedBandpass(reader.sample_rate, low, high)
+    writer = FloatSignalWriter.to_stdout(sample_rate=reader.sample_rate, raw=False)
+
+    try:
+        for chunk in reader.iter_chunks(chunk_bytes=args.chunk_bytes):
+            out = filt.process(chunk)
+            writer.write(out)
+        writer.flush()
+    except BrokenPipeError:
+        return 0
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
