@@ -1,0 +1,23 @@
+pyproject.toml
+  94f9d54350729099 1-4,16-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "648ae9493f90d1e8e700089c22d6c70461750e2e",
+  "prompts": {
+    "94f9d54350729099": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019c7eeb-8c93-78b2-8937-53b2c1e3bb2b",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>",
+      "messages": [],
+      "total_additions": 278,
+      "total_deletions": 0,
+      "accepted_lines": 277,
+      "overriden_lines": 1
+    }
+  }
+}
