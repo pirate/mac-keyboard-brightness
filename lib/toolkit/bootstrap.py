@@ -1,4 +1,4 @@
-"""Runtime bootstrap helpers for bin command entrypoints."""
+"""Runtime bootstrap helpers for command entrypoints."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 def maybe_reexec_venv(script_path: str, *, env_flag: str = "MSIG_SKIP_REEXEC") -> None:
     """Re-exec into ./.venv/bin/python when available.
 
-    This lets ./bin scripts work without manually activating the venv.
+    This lets commands work without manually activating the venv.
     """
     debug = os.environ.get("MSIG_DEBUG_REEXEC") == "1"
     if os.environ.get(env_flag) == "1":
@@ -19,11 +19,20 @@ def maybe_reexec_venv(script_path: str, *, env_flag: str = "MSIG_SKIP_REEXEC") -
         return
 
     script = Path(script_path).resolve()
-    repo_root = script.parents[1]
-    vpy = repo_root / ".venv" / "bin" / "python"
-    if not vpy.exists():
+    candidates = [script.parent]
+    if len(script.parents) >= 2:
+        candidates.append(script.parents[1])
+
+    vpy = None
+    for base in candidates:
+        cand = base / ".venv" / "bin" / "python"
+        if cand.exists():
+            vpy = cand
+            break
+
+    if vpy is None:
         if debug:
-            print(f"[msig] no venv python at {vpy}", file=sys.stderr)
+            print(f"[msig] no venv python found for {script}", file=sys.stderr)
         return
 
     try:

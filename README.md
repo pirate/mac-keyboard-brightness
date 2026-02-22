@@ -11,7 +11,7 @@ git clone https://github.com/olvvier/apple-silicon-accelerometer
 cd apple-silicon-accelerometer
 python3 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 -m pip install -r lib/requirements.txt
 export PATH="$PWD:$PATH"
 ```
 

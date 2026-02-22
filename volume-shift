@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+LIB_ROOT = ROOT / "lib"
+for _p in (LIB_ROOT, ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from toolkit.bootstrap import maybe_reexec_venv
 
