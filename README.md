@@ -164,6 +164,7 @@ sudo accelerometer \
 - `accelerometer` requires root (AppleSPU HID access).
 - `microphone`/`speaker` depend on `sounddevice` + PortAudio runtime.
 - Keyboard/display brightness tools need supported hardware/permissions.
+- `keyboard-brightness` uses the bundled Apple Silicon KBPulse binary at `lib/KBPulse` (arm64).
 - `fan-speed` uses AppleSMC private IOKit APIs on Apple Silicon; writing fan targets typically requires `sudo`.
 - `frequency-shift` is intentionally lightweight and artifact-prone at extreme factors.
 

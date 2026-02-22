@@ -15,16 +15,37 @@ from pathlib import Path
 
 def resolve_kbpulse_binary(start_dir: str | None = None) -> str | None:
     """Resolve KBPulse binary path from common local locations."""
-    base = Path(start_dir or os.getcwd()).resolve()
-    candidates = [
-        os.environ.get("KBPULSE_BIN"),
-        str(base / "KBPulse" / "bin" / "KBPulse"),
-        str(base / ".localbin" / "KBPulse"),
-        str(base / "KBPulse" / "build" / "Release" / "KBPulse"),
-        str(base / "KBPulse" / "build" / "Debug" / "KBPulse"),
-        shutil.which("KBPulse"),
-        shutil.which("kbpulse"),
-    ]
+    roots: list[Path] = [Path(__file__).resolve().parent]
+    if start_dir:
+        roots.append(Path(start_dir).resolve())
+    roots.append(Path(os.getcwd()).resolve())
+
+    # Expand roots with parent dirs so scripts installed under .venv/bin can
+    # still discover repo-local assets when run from the project root.
+    expanded: list[Path] = []
+    for root in roots:
+        expanded.append(root)
+        expanded.append(root.parent)
+        expanded.append(root.parent.parent)
+
+    # De-duplicate while preserving priority order.
+    uniq_bases: list[Path] = []
+    for b in expanded:
+        if b not in uniq_bases:
+            uniq_bases.append(b)
+
+    candidates: list[str | None] = [os.environ.get("KBPULSE_BIN")]
+    for base in uniq_bases:
+        candidates.extend(
+            [
+                str(base / "lib" / "KBPulse"),
+                str(base / "KBPulse" / "bin" / "KBPulse"),
+                str(base / ".localbin" / "KBPulse"),
+                str(base / "KBPulse" / "build" / "Release" / "KBPulse"),
+                str(base / "KBPulse" / "build" / "Debug" / "KBPulse"),
+            ]
+        )
+    candidates.extend([shutil.which("KBPulse"), shutil.which("kbpulse")])
     for cand in candidates:
         if not cand:
             continue
