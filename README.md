@@ -11,16 +11,17 @@ git clone https://github.com/olvvier/apple-silicon-accelerometer
 cd apple-silicon-accelerometer
 
 uv venv
-uv pip install -r requirements.txt
+source .venv/bin/activate
+uv pip install -r lib/requirements.txt
 export PATH="$PWD:$PATH"
 
+# flash the keyboard according to your heartbeat (keep your wrists on palm rests)
 sudo accelerometer \
   | bandpass 0.8 3 \
-  | tee >(keyboard-brightness) >(visualizer) \
+  | tee >(visualizer) \
   | metronome \
-  | frequency-shift 1000 \
   | volume-shift 0.8 \
-  | speaker
+  | keyboard-brightness
 ```
 
 ![Flashing keyboard gif](https://i.imgur.com/AS6tTre.gif)
@@ -173,10 +174,6 @@ It's fun.  Here are some ideas:
  - make your keyboard flash to the beat of music
  - make your keyboard flash when your boss's iPhone comes within bluetooth range
 
-
-## license
-
-MIT
 
 ## links
 
