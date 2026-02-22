@@ -11,8 +11,8 @@ git clone https://github.com/olvvier/apple-silicon-accelerometer
 cd apple-silicon-accelerometer
 
 uv venv
-source .venv/bin/activate
 uv sync
+source .venv/bin/activate
 
 # flash the keyboard according to your heartbeat (keep your wrists on palm rests)
 sudo accelerometer \

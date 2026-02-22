@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "apple-hardware-toys"
 version = "0.1.0"
@@ -8,4 +12,23 @@ dependencies = [
     "numpy>=1.26",
     "pywavelets>=1.4",
     "sounddevice>=0.4",
+]
+
+[tool.setuptools]
+package-dir = {"" = "lib"}
+py-modules = ["bootstrap", "dsp", "hardware", "signal_stream", "spu_sensor"]
+script-files = [
+    "accelerometer",
+    "bandpass",
+    "fan-speed",
+    "frequency-shift",
+    "heartbeat",
+    "keyboard-brightness",
+    "metronome",
+    "microphone",
+    "screen-brightness",
+    "sine",
+    "speaker",
+    "visualizer",
+    "volume-shift",
 ]
