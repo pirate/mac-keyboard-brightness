@@ -416,6 +416,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--accent-gain", type=float, default=1.35, help="Accent amplitude multiplier.")
     p.add_argument("--block-size", type=int, default=512, help="Frames per emitted chunk.")
+    p.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="Emit exactly N pulses then exit 0 (default: unlimited).",
+    )
     p.add_argument("--min-bpm", type=float, default=90.0, help="Auto mode minimum BPM.")
     p.add_argument("--max-bpm", type=float, default=170.0, help="Auto mode maximum BPM.")
     p.add_argument(
@@ -455,6 +461,7 @@ def parse_args() -> argparse.Namespace:
 def run_fixed(args: argparse.Namespace) -> int:
     fs = float(args.rate)
     samples_per_beat = fs * 60.0 / float(args.bpm)
+    max_pulses = int(args.count) if args.count is not None else None
 
     synth = PulseSynth(
         sample_rate=fs,
@@ -484,16 +491,23 @@ def run_fixed(args: argparse.Namespace) -> int:
 
     try:
         while running:
-            chunk = [0.0] * int(args.block_size)
-            for i in range(len(chunk)):
+            chunk: list[float] = []
+            for _ in range(int(args.block_size)):
                 while float(sample_index) >= next_beat:
+                    if max_pulses is not None and synth.beat_count >= max_pulses:
+                        break
                     synth.trigger()
                     next_beat += samples_per_beat
-                chunk[i] = synth.sample()
+                y = synth.sample()
+                chunk.append(y)
                 sample_index += 1
+                if max_pulses is not None and synth.beat_count >= max_pulses and synth.pulse_left <= 0:
+                    running = False
+                    break
 
-            sys.stdout.buffer.write(struct.pack("<%sf" % len(chunk), *chunk))
-            sys.stdout.buffer.flush()
+            if chunk:
+                sys.stdout.buffer.write(struct.pack("<%sf" % len(chunk), *chunk))
+                sys.stdout.buffer.flush()
 
             target_t = target_t0 + (sample_index / fs)
             sleep_s = target_t - time.monotonic()
@@ -582,13 +596,14 @@ def run_follow(args: argparse.Namespace) -> int:
     ac_bpm_smooth = None
     ac_conf = 0.0
     total_onsets = 0
+    max_pulses = int(args.count) if args.count is not None else None
 
     try:
         for chunk in reader.iter_chunks(chunk_bytes=max(256, int(args.block_size) * 4)):
             if not running:
                 break
-            out = [0.0] * len(chunk)
-            for i, s in enumerate(chunk):
+            out: list[float] = []
+            for s in chunk:
                 t = sample_index / fs
                 if first_t is None:
                     first_t = t
@@ -791,17 +806,21 @@ def run_follow(args: argparse.Namespace) -> int:
                         while next_click_t <= t:
                             next_click_t += output_period
 
-                if should_trigger:
+                if should_trigger and (max_pulses is None or synth.beat_count < max_pulses):
                     synth.trigger()
                     trigger_hits += 1
                     last_trigger_t = t
                     recent_triggers.append(t)
 
-                out[i] = synth.sample()
+                out.append(synth.sample())
                 sample_index += 1
+                if max_pulses is not None and synth.beat_count >= max_pulses and synth.pulse_left <= 0:
+                    running = False
+                    break
 
-            sys.stdout.buffer.write(struct.pack("<%sf" % len(out), *out))
-            sys.stdout.buffer.flush()
+            if out:
+                sys.stdout.buffer.write(struct.pack("<%sf" % len(out), *out))
+                sys.stdout.buffer.flush()
 
             if args.debug:
                 now = time.monotonic()
@@ -820,6 +839,8 @@ def run_follow(args: argparse.Namespace) -> int:
                     pred_hits = 0
                     trigger_hits = 0
                     last_debug = now
+            if not running:
+                break
 
     except BrokenPipeError:
         return 0
@@ -844,6 +865,8 @@ def main() -> int:
         raise SystemExit("require 0 < --min-bpm < --max-bpm")
     if args.bpm is not None and args.bpm <= 0:
         raise SystemExit("bpm must be > 0")
+    if args.count is not None and args.count <= 0:
+        raise SystemExit("--count must be > 0")
 
     stdin_piped = not os.isatty(sys.stdin.fileno())
 
