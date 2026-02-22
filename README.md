@@ -1,89 +1,162 @@
-## Archived: Use https://github.com/EthanRDoesMC/KBPulse for Macs released after 2016
+# apple-silicon-accelerometer
 
----
+A modular, pipe-able macOS hardware signal toolkit with runnable commands at repo top-level.
 
-# Control Mac Keyboard Brightness: kbrightness & dbrightness
-Programmatically flash the keyboard lights and control display brightness on Macs.  You can flash them to the beat of music, or use it for alerts and notifications.
+Everything speaks one stream format so tools can be mixed freely in UNIX pipelines.
 
-This was inspired by [@tcr's repo](https://github.com/tcr/macbook-brightness).  This is also an alternative to the old iSpazz iTunes plugin, which no longer works.
-I had trouble finding any other easy-to-use binary for controlling keyboard brightness, so I made one.
-
-
-![Flashing keyboard gif](https://i.imgur.com/AS6tTre.gif)
-![Flashing display gif](https://i.imgur.com/cRFsoDM.gif)
-
-## Usage
-
- - `blink` is a shortcut to flash the keyboard lights [n] times for [t] seconds each time
- - `kbrightness` manages the keyboard backlight brightness
- - `dbrightness` manages the display backlight brightness
- - `python3 audio.py` flash the keyboard based on the audio input from your mic, makes it flash to the beat of music
-
-Use blink in your shell scripts to alert you when things have succeeded or failed.
-e.g. `wget https://example.com/large-file.mp4 && blink 2` or `./tests.py || blink 3 1`
+## quick start
 
 ```bash
-git clone https://github.com/pirate/mac-keyboard-brightness
-cd mac-keyboard-brightness/
-
-./kbrightness          # gets current keyboard brightness
-# 0.286447
-./kbrightness 0.85     # sets keyboard brightness to 85%
-
-./dbrightness          # gets current display brightness
-# 0.938477
-./dbrightness 0.42     # sets display brightness to 42%
-=======
-
-./blink                # flash the keyboard lights once (good for subtle alerts, e.g. git pull && blink 2)
-./blink 2              # flash the keyboard lights twice
-./blink 10 0.1         # flash the keyboard lights 10 times, for 0.1 seconds each time
-./blink 1000 0.01      # turn your keyboard into a disco strobe
-
-=======
-
-# Flash your keyboard to the beat of the music! (uses mic input)
-brew install python3 pyaudio portaudio
-pip3 install --upgrade pyaudio audioop
-python3 audio.py
+git clone https://github.com/olvvier/apple-silicon-accelerometer
+cd apple-silicon-accelerometer
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+export PATH="$PWD:$PATH"
 ```
-You should be able to download the repo and use the binaries without needing to recompile anything (tested on macOS Sierra, High Sierra, and Mojave).
 
-## Why?
+## stream model
 
-It's fun.  Here are some ideas:
+All stream tools read/write:
 
- - make a bitbar menubar app to control keyboard brightness
- - make your keyboard lights flash for security alerts using [Security Growler](https://github.com/pirate/security-growler)
- - make your keyboard flash right before your display is about to sleep
- - make your keyboard flash on incoming email
- - make your keyboard flash to the beat of music
- - make your keyboard flash when your boss's iPhone comes within bluetooth range
+- header: `MSIG1 <sample_rate_hz>\n`
+- payload: little-endian `float32` mono samples
 
-## Advanced
+Most processors also support raw float32 input via `--raw --rate <hz>`.
 
-If you want to write more advanced programs to update the brightness at higher frequencies
-(e.g. to make your keyboard flash to music), you can use the C functions directly.
+## command reference
 
- - `setDisplayBrightness`, `getDisplayBrightness`
- - `setKeyboardBrightness`, `getKeyboardBrightness`
- - `getLightSensors`: get ambient light sensor values, see [@tcr's original repo](https://github.com/tcr/macbook-brightness/blob/master/displaybrightness.c#L54)
+### source commands
 
-Compile each file individually with:
+1. `accelerometer`
+- Purpose: read Apple SPU accelerometer and emit mono signal.
+- Args: `--rate <hz>` (<= 800), `--axis x|y|z|mag`, `--raw`.
+- Notes: requires `sudo`.
+
+2. `microphone`
+- Purpose: capture mono mic signal and emit stream.
+- Args: `--rate <hz>`, `--block-size <frames>`.
+
+3. `metronome [bpm]`
+- Purpose: emit metronome pulses; with piped stdin it auto-detects/follows BPM.
+- Args: optional `bpm`, `--rate` (fixed mode), `--pulse-ms`, `--tone-hz`, `--level`, `--accent-every`, `--accent-gain`, `--block-size`, `--min-bpm`, `--max-bpm`, `--detect-low-hz`, `--detect-high-hz`, `--self-echo-ms`, `--follow`, `--debug`, `--raw`.
+
+### processor / analysis commands
+
+4. `bandpass <low_hz> <high_hz>`
+- Purpose: realtime cascaded high/low-pass filter.
+- Args: positional cutoffs or `--low/--high`, `--chunk-bytes`, `--raw --rate`.
+
+5. `frequency-shift <factor>`
+- Purpose: best-effort realtime frequency scaling.
+- Args: `factor`, `--chunk-bytes`, `--raw --rate`.
+
+6. `volume-shift <gain>`
+- Purpose: scalar amplitude gain.
+- Args: `gain`, `--chunk-bytes`, `--raw --rate`.
+
+7. `heartbeat`
+- Purpose: emit BPM/confidence JSON lines from incoming signal (typically bandpassed).
+- Args: `--interval`, `--window-seconds`, `--emit-final`, `--chunk-bytes`, `--raw --rate`.
+
+### output / sink commands
+
+8. `speaker`
+- Purpose: play incoming stream on default output device.
+- Args: `--device-rate`, `--block-size`.
+
+9. `visualizer`
+- Purpose: terminal waveform + level monitor.
+- Args: `--fps`, `--window-seconds`, `--chunk-bytes`, `--raw --rate`.
+
+10. `keyboard-brightness`
+- Purpose: beat-follow keyboard backlight control.
+- Args: `--send-hz`, `--fade-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--as-root`.
+- Alias: `keyboad-brightness` (compat typo alias).
+
+11. `screen-brightness`
+- Purpose: beat-follow display brightness control.
+- Args: `--send-hz`, `--min-level`, `--max-level`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`.
+
+12. `fan-speed`
+- Purpose: signal-follow fan RPM control (both fans in sync by default; beat-alternating optional).
+- Args: `--send-hz`, `--min-rpm`, `--max-rpm`, `--min-frac`, `--max-frac`, `--pulse-depth`, `--couple`, `--alternate`, `--input-map`, `--beat-threshold`, `--beat-hold-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`.
+
+## mix-and-match recipes
+
+Heartbeat from accelerometer:
 
 ```bash
-gcc -std=c99 -o kbrightness keyboard-brightness.c -framework IOKit -framework ApplicationServices
-# OR
-gcc -std=c99 -o dbrightness display-brightness.c -framework IOKit -framework ApplicationServices
+sudo accelerometer | bandpass 0.8 3 | heartbeat
 ```
 
-## Links
+Music-reactive keyboard + speakers:
 
-- https://github.com/maxmouchet/LightKit control keyboard and screen brightness via Swift
-- https://github.com/tcr/macbook-brightness (the core brightness code is copied from @tcr's, but separated into two cli utils)
-- http://stackoverflow.com/questions/3239749/programmatically-change-mac-display-brightness
-- https://web.archive.org/web/20110828210316/http://mattdanger.net:80/2008/12/adjust-mac-os-x-display-brightness-from-the-terminal/
-- http://osxbook.com/book/bonus/chapter10/light/
-- https://github.com/samnung/maclight/blob/master/lights_handle.cpp
-- http://www.keindesign.de/stefan/Web/Sites/iWeb/Site/iSpazz.html
-- https://github.com/bhoeting/DiscoKeyboard
+```bash
+microphone --rate 44100 \
+  | tee >(keyboard-brightness --send-hz 30 --fade-ms 20) \
+  | volume-shift 0.8 \
+  | speaker
+```
+
+Metronome to speakers:
+
+```bash
+metronome 120 | speaker
+```
+
+Auto-follow metronome from mic input:
+
+```bash
+microphone --rate 44100 | metronome | speaker
+```
+
+Metronome driving keyboard pulses:
+
+```bash
+metronome 120 | keyboard-brightness --send-hz 24 --fade-ms 20
+```
+
+Metronome driving fan pulses:
+
+```bash
+metronome 120 | sudo fan-speed --send-hz 4 --alternate --input-map beat --min-frac 0.30 --max-frac 0.70
+```
+
+Slow sine fan sweep (sync L/R):
+
+```bash
+sine 0.1 | sudo fan-speed
+```
+
+One source, multiple sinks:
+
+```bash
+sudo accelerometer \
+  | bandpass 0.8 3 \
+  | tee >(keyboard-brightness) >(visualizer) \
+  | frequency-shift 1000 \
+  | volume-shift 0.8 \
+  | speaker
+```
+
+## practical notes
+
+- `accelerometer` requires root (AppleSPU HID access).
+- `microphone`/`speaker` depend on `sounddevice` + PortAudio runtime.
+- Keyboard/display brightness tools need supported hardware/permissions.
+- `fan-speed` uses AppleSMC private IOKit APIs on Apple Silicon; writing fan targets typically requires `sudo`.
+- `frequency-shift` is intentionally lightweight and artifact-prone at extreme factors.
+
+## legacy script
+
+`motion_live.py` remains available, but primary usage is top-level commands in this repo.
+
+## license
+
+MIT
+
+## links
+
+- apple silicon accelerometer: https://github.com/olvvier/apple-silicon-accelerometer
+- KBPulse: https://github.com/EthanRDoesMC/KBPulse/

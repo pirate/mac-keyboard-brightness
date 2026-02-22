@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Read MSIG1 float32 mono stream from stdin and play to speakers."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Play MSIG1 float32 mono stream on default audio output."
+    )
+    parser.add_argument(
+        "--device-rate",
+        type=float,
+        default=None,
+        help="Output device sample rate in Hz (default: output device default).",
+    )
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        default=1024,
+        help="Output block size in frames.",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+
+    try:
+        import numpy as np
+    except Exception as exc:
+        raise SystemExit(f"numpy is required: {exc}") from exc
+
+    try:
+        from toolkit.dsp import LinearResampler
+        from toolkit.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
+    except Exception as exc:
+        raise SystemExit(f"speaker dependencies unavailable: {exc}") from exc
+
+    if is_tty_stdin():
+        raise SystemExit("speaker expects an MSIG1 stream on stdin")
+
+    try:
+        import sounddevice as sd
+    except Exception as exc:
+        raise SystemExit(f"sounddevice is required: {exc}") from exc
+
+    try:
+        reader = FloatSignalReader.from_stdin()
+    except (EOFError, StreamFormatError):
+        return 0
+    input_rate = float(reader.sample_rate)
+
+    if args.device_rate is not None:
+        if args.device_rate <= 0:
+            raise SystemExit("--device-rate must be > 0")
+        output_rate = float(args.device_rate)
+    else:
+        info = sd.query_devices(None, "output")
+        output_rate = float(info.get("default_samplerate", 0.0) or 0.0)
+        if output_rate <= 0:
+            output_rate = input_rate
+
+    resampler = (
+        LinearResampler(input_rate=input_rate, output_rate=output_rate)
+        if abs(input_rate - output_rate) > 1e-6
+        else None
+    )
+
+    with sd.OutputStream(
+        channels=1,
+        samplerate=output_rate,
+        dtype="float32",
+        blocksize=max(1, int(args.block_size)),
+    ) as stream:
+        for chunk in reader.iter_chunks(chunk_bytes=8192):
+            out = resampler.process(chunk) if resampler is not None else chunk
+            if out.size == 0:
+                continue
+            stream.write(np.asarray(out, dtype=np.float32).reshape(-1, 1))
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,937 @@
+#!/usr/bin/env python3
+"""Terminal visualizer with live waveform, FFT stats, spectrogram, and RMS trend."""
+
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import shutil
+import sys
+import time
+from collections import deque
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
+RST = "\x1b[0m"
+BOLD = "\x1b[1m"
+DIM = "\x1b[2m"
+RED = "\x1b[31m"
+GRN = "\x1b[32m"
+YEL = "\x1b[33m"
+CYN = "\x1b[36m"
+BRED = "\x1b[91m"
+BWHT = "\x1b[97m"
+CLEAR = "\x1b[2J\x1b[H"
+HOME = "\x1b[H"
+HIDE_CURSOR = "\x1b[?25l"
+SHOW_CURSOR = "\x1b[?25h"
+BLOCKS = " ▁▂▃▄▅▆▇█"
+SPEC_CHARS = " ·░▒▓█"
+SPEC_PALETTE = [
+    21, 27, 33, 39, 45, 51, 87, 123,
+    159, 195, 231, 224, 217, 210, 203, 196,
+]
+_ANSI_RE = re.compile(r"\x1b\[[^m]*m")
+np = None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Render a live TUI waveform + FFT + spectrogram from an MSIG1 stream."
+    )
+    p.add_argument(
+        "--fps",
+        type=float,
+        default=20.0,
+        help="UI refresh rate (default: 20).",
+    )
+    p.add_argument(
+        "--window-seconds",
+        type=float,
+        default=5.0,
+        help="Visible waveform duration in seconds (default: 5).",
+    )
+    p.add_argument(
+        "--fft-window-seconds",
+        type=float,
+        default=0.25,
+        help="FFT analysis window in seconds (default: 0.25, clamped to 256-4096 samples).",
+    )
+    p.add_argument(
+        "--spec-rows",
+        type=int,
+        default=8,
+        help="Spectrogram row count (default: 8).",
+    )
+    p.add_argument(
+        "--spec-scroll-hz",
+        type=float,
+        default=6.0,
+        help="Spectrogram scroll speed in columns/sec (default: 6).",
+    )
+    p.add_argument(
+        "--spec-min-hz",
+        type=float,
+        default=20.0,
+        help="Spectrogram low frequency bound in Hz (default: 20).",
+    )
+    p.add_argument(
+        "--spec-max-hz",
+        type=float,
+        default=10000.0,
+        help="Spectrogram high frequency bound in Hz (default: 10000).",
+    )
+    p.add_argument(
+        "--no-dc-block",
+        action="store_true",
+        help="Disable DC-blocking/high-pass preprocessing (enabled by default).",
+    )
+    p.add_argument(
+        "--dc-cut-hz",
+        type=float,
+        default=0.8,
+        help="DC-block high-pass corner frequency in Hz (default: 0.8).",
+    )
+    p.add_argument(
+        "--chunk-bytes",
+        type=int,
+        default=None,
+        help="Read size in bytes (auto by sample rate if omitted).",
+    )
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Read raw float32 input instead of MSIG1 header.",
+    )
+    p.add_argument(
+        "--rate",
+        type=float,
+        default=None,
+        help="Input sample rate Hz (required with --raw).",
+    )
+    return p
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return lo if v < lo else hi if v > hi else v
+
+
+def _vlen(s: str) -> int:
+    return len(_ANSI_RE.sub("", s))
+
+
+def _line(content: str, width: int) -> str:
+    pad = max(0, width - _vlen(content))
+    return f"{DIM}│{RST}{content}{' ' * pad}{DIM}│{RST}"
+
+
+def _sep(width: int, label: str = "") -> str:
+    if label:
+        rest = max(0, width - len(label) - 2)
+        return f"{DIM}├─{label}{'─' * rest}┤{RST}"
+    return f"{DIM}├{'─' * width}┤{RST}"
+
+
+def _sparkline(data: list[float], width: int, ceil: float | None = None) -> str:
+    if width <= 0:
+        return ""
+    if not data:
+        return " " * width
+    d = list(data)
+    if len(d) < width:
+        d = [0.0] * (width - len(d)) + d
+    elif len(d) > width:
+        d = d[-width:]
+    if ceil is None or ceil <= 0:
+        ceil = max(abs(v) for v in d) if d else 1.0
+    if ceil <= 0:
+        ceil = 1.0
+    out = []
+    for v in d:
+        frac = min(1.0, abs(v) / ceil)
+        out.append(BLOCKS[min(8, int(frac * 8))])
+    return "".join(out)
+
+
+def _downsample(data: list[float], width: int) -> list[float]:
+    n = len(data)
+    if n <= width:
+        return list(data)
+    step = n / width
+    out = []
+    for col in range(width):
+        s_i = int(col * step)
+        e_i = int((col + 1) * step)
+        chunk = data[s_i:e_i]
+        out.append(max((abs(v) for v in chunk), default=0.0))
+    return out
+
+
+def _fmt_hz(v: float | None) -> str:
+    if v is None:
+        return "-"
+    if v >= 1000.0:
+        return f"{v / 1000.0:.2f}kHz"
+    return f"{v:.1f}Hz"
+
+
+def _fmt_peak(rank: int, hz: float, db: float) -> str:
+    return f"{rank:>2}. {_fmt_hz(hz):>8} {db:>6.1f}dB"
+
+
+def _color_for_frac(frac: float) -> str:
+    f = _clamp(frac, 0.0, 1.0)
+    ci = min(len(SPEC_PALETTE) - 1, int(round(f * (len(SPEC_PALETTE) - 1))))
+    return f"\x1b[38;5;{SPEC_PALETTE[ci]}m"
+
+
+def _bpm_for_hz(hz: float) -> float | None:
+    bpm = hz * 60.0
+    if 5.0 <= bpm <= 400.0:
+        return bpm
+    return None
+
+
+def _top_freq_row(
+    *,
+    rank: int,
+    hz: float,
+    db: float,
+    source: str,
+    db_lo: float,
+    db_hi: float,
+    bar_w: int,
+) -> str:
+    frac = _clamp((db - db_lo) / (db_hi - db_lo + 1e-9), 0.0, 1.0)
+    color = _color_for_frac(frac)
+    fill = max(0, min(bar_w, int(round(frac * bar_w))))
+    bar_fill = "█" * fill
+    bar_rest = "░" * (bar_w - fill)
+    bpm = _bpm_for_hz(hz)
+    bpm_txt = f"  {DIM}{bpm:6.1f} BPM{RST}" if bpm is not None else ""
+    src_txt = f"{DIM}[{source}]{RST}"
+    return (
+        f"{rank:>2}. {_fmt_hz(hz):>8}  "
+        f"{color}{db:>6.1f}dB{RST}  "
+        f"{src_txt} "
+        f"{color}{bar_fill}{RST}{DIM}{bar_rest}{RST}"
+        f"{bpm_txt}"
+    )
+
+
+def _spec_color_row(fracs: list[float]) -> str:
+    if not fracs:
+        return ""
+    out: list[str] = []
+    prev_code: int | None = None
+    for frac in fracs:
+        f = _clamp(frac, 0.0, 1.0)
+        ci = min(len(SPEC_PALETTE) - 1, int(round(f * (len(SPEC_PALETTE) - 1))))
+        hi = min(len(SPEC_CHARS) - 1, int(round(f * (len(SPEC_CHARS) - 1))))
+        code = SPEC_PALETTE[ci]
+        if code != prev_code:
+            out.append(f"\x1b[38;5;{code}m")
+            prev_code = code
+        out.append(SPEC_CHARS[hi])
+    out.append(RST)
+    return "".join(out)
+
+
+class LiveStats:
+    def __init__(
+        self,
+        *,
+        fs: float,
+        window_seconds: float,
+        fft_window_seconds: float,
+        spec_rows: int,
+        spec_scroll_hz: float,
+        spec_min_hz: float,
+        spec_max_hz: float,
+        dc_block: bool,
+        dc_cut_hz: float,
+    ) -> None:
+        self.fs = float(fs)
+        self.dc_block = bool(dc_block)
+        self.dc_cut_hz = float(dc_cut_hz)
+        self.sample_count = 0
+        self.waveform = deque(maxlen=max(64, int(self.fs * window_seconds)))
+        self.rms_window = deque(maxlen=max(16, int(self.fs)))
+        self.rms_trend = deque(maxlen=100)  # 10s at ~10Hz
+        self._rms_dec = 0
+        self.latest_rms = 0.0
+        self.latest_peak = 0.0
+        self.level_norm = 0.0
+
+        target_fft = max(16, int(self.fs * fft_window_seconds))
+        fft_size = 1
+        while fft_size < target_fft:
+            fft_size <<= 1
+        self.fft_size = max(256, min(4096, fft_size))
+        self.fft_hop = max(1, self.fft_size // 8)
+        self._fft_pending = 0
+        self.fft_buf = deque(maxlen=self.fft_size)
+        self.fft_freqs = np.fft.rfftfreq(self.fft_size, d=1.0 / self.fs)
+        self.hann = np.hanning(self.fft_size).astype(np.float64)
+
+        self.spec_rows = max(4, int(spec_rows))
+        self.spec_scroll_hz = float(spec_scroll_hz)
+        self.spec_min_hz_req = float(spec_min_hz)
+        self.spec_max_hz_req = float(spec_max_hz)
+        self.spec_cols: deque[np.ndarray] = deque(maxlen=1200)
+        self.spec_edges = self._build_spec_edges()
+        self._spec_accum: list[np.ndarray] = []
+        self._spec_sample_budget = 0.0
+        # Do not scroll faster than FFT analysis hop cadence.
+        self.spec_hop_samples = max(float(self.fft_hop), self.fs / self.spec_scroll_hz)
+
+        self.top_count = 10
+        self.top_min_hz = 0.1
+        self.top_max_hz = min(20000.0, 0.5 * self.fs)
+        self.top_freqs: list[tuple[float, float, str]] = []
+        self._topk_power_accum = np.zeros(self.fft_freqs.shape, dtype=np.float64)
+        self._topk_accum_count = 0
+        self._topk_sample_budget = 0.0
+        self._have_spectrum = False
+
+        # Low-frequency autocorr beat detector (clamped to 0.6-3.0 Hz).
+        self.beat_freq_min = 0.6
+        self.beat_freq_max = 3.0
+        self.beat_decim = max(1, int(round(self.fs / 100.0)))
+        self.beat_fs = self.fs / float(self.beat_decim)
+        self.beat_env = deque(maxlen=max(256, int(self.beat_fs * 12.0)))
+        self._beat_carry = np.zeros(0, dtype=np.float64)
+        self._beat_update_budget = 0.0
+        self.acorr_ring: list[float] = []
+        self.hr_freq_raw: float | None = None
+        self.hr_freq_track: float | None = None
+        self.hr_bpm: float | None = None
+        self.hr_freq_hz: float | None = None
+        self.hr_confidence = 0.0
+        self.beat_history: deque[tuple[float, float, float, float]] = deque(maxlen=24)
+
+        if self.dc_block and self.dc_cut_hz > 0:
+            self.hp_alpha = self.fs / (self.fs + 2.0 * math.pi * self.dc_cut_hz)
+        else:
+            self.hp_alpha = 0.0
+        self.hp_prev_in = 0.0
+        self.hp_prev_out = 0.0
+
+    def _build_spec_edges(self) -> np.ndarray:
+        nyq = max(1e-6, 0.5 * self.fs)
+        fft_min = max(self.fs / self.fft_size, 0.5)
+
+        hi = min(max(fft_min, self.spec_max_hz_req), nyq)
+        lo = max(fft_min, min(self.spec_min_hz_req, hi * 0.95))
+        if hi <= lo:
+            lo = max(fft_min, hi * 0.5)
+        self.spec_min_hz = lo
+        self.spec_max_hz = hi
+        if self.spec_rows <= 1 or hi <= lo:
+            return np.asarray([lo, hi], dtype=np.float64)
+        return np.geomspace(lo, hi, self.spec_rows + 1, dtype=np.float64)
+
+    def preprocess_chunk(self, chunk: np.ndarray) -> np.ndarray:
+        x = np.asarray(chunk, dtype=np.float32)
+        if x.size == 0:
+            return x
+        if not self.dc_block or self.hp_alpha <= 0:
+            return x
+
+        y = np.empty_like(x)
+        prev_in = self.hp_prev_in
+        prev_out = self.hp_prev_out
+        a = self.hp_alpha
+        for i, s in enumerate(x):
+            out = a * (prev_out + float(s) - prev_in)
+            y[i] = out
+            prev_in = float(s)
+            prev_out = out
+        self.hp_prev_in = prev_in
+        self.hp_prev_out = prev_out
+        return y
+
+    def _update_fft(self) -> None:
+        if len(self.fft_buf) < self.fft_size:
+            return
+        x = np.asarray(self.fft_buf, dtype=np.float64)
+        x = x - float(np.mean(x))
+        x = x * self.hann
+        spec = np.fft.rfft(x)
+        power = (spec.real * spec.real + spec.imag * spec.imag) + 1e-20
+        if power.size < 2:
+            return
+        self._topk_power_accum += power
+        self._topk_accum_count += 1
+        self._topk_sample_budget += float(self.fft_hop)
+        if self._topk_sample_budget >= self.fs and self._topk_accum_count > 0:
+            avg_power = self._topk_power_accum / float(self._topk_accum_count)
+            peaks = self._extract_top_freqs(avg_power)
+            self.top_freqs = self._augment_top_with_autocorr(peaks)
+            self._topk_power_accum.fill(0.0)
+            self._topk_accum_count = 0
+            self._topk_sample_budget = self._topk_sample_budget % self.fs
+
+        col = np.zeros(self.spec_rows, dtype=np.float64)
+        f = self.fft_freqs
+        for r in range(self.spec_rows):
+            lo = float(self.spec_edges[r])
+            hi = float(self.spec_edges[r + 1])
+            i0 = int(np.searchsorted(f, lo, side="left"))
+            i1 = int(np.searchsorted(f, hi, side="right"))
+            if i1 <= i0:
+                i1 = min(power.size, i0 + 1)
+            # Use peak-in-band instead of mean to make tonal lines/ridges stand out.
+            row_db = 10.0 * math.log10(float(np.max(power[i0:i1])) + 1e-20)
+            col[r] = row_db
+        self._spec_accum.append(col)
+        self._spec_sample_budget += float(self.fft_hop)
+        if self._spec_sample_budget >= self.spec_hop_samples:
+            self._spec_sample_budget -= self.spec_hop_samples
+            if self._spec_accum:
+                merged = np.mean(np.stack(self._spec_accum, axis=0), axis=0)
+                self.spec_cols.append(merged.astype(np.float64, copy=False))
+                self._spec_accum.clear()
+        self._have_spectrum = True
+
+    def _extract_top_freqs(self, power: np.ndarray) -> list[tuple[float, float, str]]:
+        f = self.fft_freqs
+        mask = (f >= self.top_min_hz) & (f <= self.top_max_hz)
+        idx = np.flatnonzero(mask)
+        if idx.size == 0:
+            return []
+
+        vals = power[idx].astype(np.float64, copy=True)
+        if not np.any(vals > 0):
+            return []
+        p_db = 10.0 * np.log10(power + 1e-20)
+
+        raw: list[tuple[float, float, str]] = []
+        suppress_bins = 1
+        candidate_n = max(self.top_count * 8, 64)
+        for _ in range(candidate_n):
+            rel = int(np.argmax(vals))
+            if float(vals[rel]) <= 0.0:
+                break
+            gi = int(idx[rel])
+            raw.append((float(f[gi]), float(p_db[gi]), "FFT"))
+            lo = max(0, rel - suppress_bins)
+            hi = min(vals.size, rel + suppress_bins + 1)
+            vals[lo:hi] = 0.0
+
+        if not raw:
+            return []
+
+        # Merge nearby bins into broader, frequency-relative buckets so one physical peak
+        # does not show up as many adjacent FFT bins.
+        bin_hz = self.fs / float(self.fft_size)
+        raw.sort(key=lambda t: t[0])
+        merged: list[tuple[float, float, str]] = []
+        for hz, db, src in raw:
+            if not merged:
+                merged.append((hz, db, src))
+                continue
+            mhz, mdb, msrc = merged[-1]
+            merge_hz = max(2.0 * bin_hz, 0.15 * max(mhz, hz))
+            if abs(hz - mhz) <= merge_hz:
+                if db > mdb:
+                    merged[-1] = (hz, db, src)
+            else:
+                merged.append((hz, db, src))
+
+        out = sorted(merged, key=lambda t: t[1], reverse=True)[: self.top_count]
+        out.sort(key=lambda t: t[0])
+        return out
+
+    def _augment_top_with_autocorr(
+        self, peaks: list[tuple[float, float, str]]
+    ) -> list[tuple[float, float, str]]:
+        if self.hr_freq_hz is None:
+            return peaks
+        hz = float(self.hr_freq_hz)
+        if not (self.top_min_hz <= hz <= self.top_max_hz):
+            return peaks
+
+        # Keep AC peak visible even when FFT binning is coarse at low frequencies.
+        tol_hz = 0.25
+        for f_hz, _db, _src in peaks:
+            if abs(f_hz - hz) <= tol_hz:
+                return peaks
+
+        conf = _clamp(self.hr_confidence, 0.0, 1.0)
+        if peaks:
+            db_vals = [db for _, db, _ in peaks]
+            lo = min(db_vals)
+            hi = max(db_vals)
+            db = lo + conf * (hi - lo + 1e-9)
+        else:
+            db = -60.0 + 50.0 * conf
+
+        out = list(peaks)
+        out.append((hz, float(db), "AC"))
+        out.sort(key=lambda t: t[1], reverse=True)
+        out = out[: self.top_count]
+        out.sort(key=lambda t: t[0])
+        return out
+
+    def _update_beat_env(self, vals: np.ndarray) -> None:
+        x = np.asarray(vals, dtype=np.float64)
+        if x.size == 0:
+            return
+        if self._beat_carry.size:
+            x = np.concatenate([self._beat_carry, x])
+        n_full = (x.size // self.beat_decim) * self.beat_decim
+        if n_full <= 0:
+            self._beat_carry = x
+            return
+        blk = x[:n_full].reshape(-1, self.beat_decim)
+        env = np.sqrt(np.mean(blk * blk, axis=1))
+        for v in env:
+            self.beat_env.append(float(v))
+        self._beat_carry = x[n_full:]
+
+    def _detect_heartbeat(self) -> None:
+        min_n = max(32, int(self.beat_fs * 5.0))
+        if len(self.beat_env) < min_n:
+            self.acorr_ring = []
+            self.hr_freq_raw = None
+            self.hr_bpm = None
+            self.hr_freq_hz = None
+            self.hr_confidence = 0.0
+            return
+
+        arr = np.asarray(self.beat_env, dtype=np.float64)
+        arr -= float(np.mean(arr))
+        var = float(np.dot(arr, arr))
+        if var < 1e-20:
+            self.acorr_ring = []
+            self.hr_freq_raw = None
+            self.hr_bpm = None
+            self.hr_freq_hz = None
+            self.hr_confidence = 0.0
+            return
+
+        lag_lo = max(1, int(self.beat_fs / self.beat_freq_max))
+        lag_hi = min(arr.size // 2, int(self.beat_fs / self.beat_freq_min))
+        if lag_hi <= lag_lo:
+            self.acorr_ring = []
+            self.hr_freq_raw = None
+            self.hr_bpm = None
+            self.hr_freq_hz = None
+            self.hr_confidence = 0.0
+            return
+
+        acorr: list[float] = []
+        for lag in range(lag_lo, lag_hi + 1):
+            r = float(np.dot(arr[:-lag], arr[lag:]) / var)
+            acorr.append(r)
+        self.acorr_ring = acorr
+        if not acorr:
+            self.hr_freq_raw = None
+            self.hr_bpm = None
+            self.hr_freq_hz = None
+            self.hr_confidence = 0.0
+            return
+
+        # Build local-maximum candidates from autocorrelation.
+        cand: list[tuple[float, float]] = []
+        for i in range(1, len(acorr) - 1):
+            r = float(acorr[i])
+            if r < float(acorr[i - 1]) or r < float(acorr[i + 1]):
+                continue
+            lag = lag_lo + i
+            freq = float(self.beat_fs / lag)
+            if self.beat_freq_min <= freq <= self.beat_freq_max:
+                cand.append((freq, r))
+        if not cand:
+            best_i = int(np.argmax(acorr))
+            best_r = float(acorr[best_i])
+            best_lag = lag_lo + best_i
+            best_freq = float(self.beat_fs / best_lag)
+            cand = [(best_freq, best_r)]
+
+        cand.sort(key=lambda t: t[1], reverse=True)
+        cand = cand[:8]
+
+        prev = self.hr_freq_track
+        # Prefer the lowest-frequency strong peak (fundamental) over nearby harmonics.
+        max_r = cand[0][1]
+        strong = [c for c in cand if c[1] >= max_r * 0.82]
+        chosen_freq, chosen_r = min(strong, key=lambda t: t[0])
+
+        if prev is not None and prev > 0:
+            best_score = -1e9
+            for f0, r0 in cand:
+                for mult in (0.5, 1.0, 2.0):
+                    f = f0 * mult
+                    if not (self.beat_freq_min <= f <= self.beat_freq_max):
+                        continue
+                    # Penalize large octave distance from prior estimate.
+                    jump = abs(math.log2((f + 1e-9) / (prev + 1e-9)))
+                    score = r0 - 0.60 * jump
+                    if mult == 1.0:
+                        score += 0.02
+                    if score > best_score:
+                        best_score = score
+                        chosen_freq = f
+                        chosen_r = r0
+
+        # Guard against half-time lock (e.g. 58 BPM instead of 116 BPM):
+        # if a 2x tempo candidate has comparable autocorr strength, prefer it.
+        def _r_at_freq(freq: float) -> float | None:
+            if not (self.beat_freq_min <= freq <= self.beat_freq_max):
+                return None
+            lag = int(round(self.beat_fs / freq))
+            if lag < lag_lo or lag > lag_hi:
+                return None
+            j = lag - lag_lo
+            if 0 <= j < len(acorr):
+                return float(acorr[j])
+            return None
+
+        chosen_bpm = chosen_freq * 60.0
+        if chosen_bpm < 90.0:
+            f2 = chosen_freq * 2.0
+            r2 = _r_at_freq(f2)
+            if r2 is not None and r2 >= chosen_r * 0.78:
+                chosen_freq = f2
+                chosen_r = r2
+
+        conf_raw = _clamp(chosen_r, 0.0, 1.0)
+        self.hr_freq_raw = chosen_freq
+        if self.hr_freq_track is None:
+            self.hr_freq_track = chosen_freq
+        else:
+            jump = abs(math.log2((chosen_freq + 1e-9) / (self.hr_freq_track + 1e-9)))
+            if jump > 0.45 and conf_raw < 0.55:
+                chosen_freq = self.hr_freq_track
+                conf_raw *= 0.85
+            elif jump > 0.25 and conf_raw < 0.70:
+                # Sticky tracking: resist sudden harmonic/subharmonic jumps.
+                chosen_freq = self.hr_freq_track
+                conf_raw *= 0.90
+
+            # Slew-rate limit to prevent runaway drift during complex music.
+            delta = chosen_freq - self.hr_freq_track
+            max_step_hz = 0.05 + 0.05 * conf_raw  # 3-6 BPM/s at 1Hz updates
+            if delta > max_step_hz:
+                chosen_freq = self.hr_freq_track + max_step_hz
+            elif delta < -max_step_hz:
+                chosen_freq = self.hr_freq_track - max_step_hz
+
+            alpha = 0.10 + 0.45 * conf_raw
+            self.hr_freq_track = (1.0 - alpha) * self.hr_freq_track + alpha * chosen_freq
+
+        self.hr_confidence = 0.65 * self.hr_confidence + 0.35 * conf_raw
+        if self.hr_confidence >= 0.10:
+            self.hr_freq_hz = self.hr_freq_track
+            self.hr_bpm = self.hr_freq_track * 60.0 if self.hr_freq_track is not None else None
+        else:
+            self.hr_freq_hz = None
+            self.hr_bpm = None
+
+        if self.hr_freq_track is not None:
+            t_now = self.sample_count / self.fs if self.fs > 0 else 0.0
+            self.beat_history.append(
+                (t_now, float(self.hr_freq_raw), float(self.hr_freq_track), float(self.hr_confidence))
+            )
+
+    def add_chunk(
+        self,
+        chunk: np.ndarray,
+        *,
+        level_norm: float,
+        beat_source: np.ndarray | None = None,
+    ) -> None:
+        if chunk.size == 0:
+            return
+        self.sample_count += int(chunk.size)
+
+        vals = chunk.astype(np.float64, copy=False)
+        self.latest_peak = float(np.max(np.abs(vals)))
+        self.latest_rms = float(math.sqrt(float(np.mean(vals * vals))))
+        self.level_norm = float(level_norm)
+
+        if beat_source is None:
+            self._update_beat_env(vals)
+        else:
+            self._update_beat_env(np.asarray(beat_source, dtype=np.float64))
+        self.waveform.extend(float(v) for v in chunk)
+        self.rms_window.extend(float(v) for v in chunk)
+        self.fft_buf.extend(float(v) for v in chunk)
+
+        self._rms_dec += int(chunk.size)
+        rms_step = max(1, int(self.fs // 10))
+        while self._rms_dec >= rms_step:
+            self._rms_dec -= rms_step
+            if self.rms_window:
+                rv = math.sqrt(sum(v * v for v in self.rms_window) / len(self.rms_window))
+                self.rms_trend.append(rv)
+
+        self._fft_pending += int(chunk.size)
+        while self._fft_pending >= self.fft_hop:
+            self._fft_pending -= self.fft_hop
+            self._update_fft()
+
+        self._beat_update_budget += float(chunk.size)
+        while self._beat_update_budget >= self.fs:
+            self._beat_update_budget -= self.fs
+            self._detect_heartbeat()
+
+
+def render(*, state: LiveStats, first_frame: bool) -> bool:
+    term_w = max(72, shutil.get_terminal_size(fallback=(100, 30)).columns)
+    W = term_w - 2  # inside width of the box
+    GW = W - 4
+
+    lines: list[str] = []
+    a = lines.append
+
+    top_label = " SIGNAL VISUALIZER "
+    top_bar = "─" * max(0, W - len(top_label) - 1)
+    a(f"{DIM}┌─{top_label}{top_bar}┐{RST}")
+
+    elapsed = state.sample_count / state.fs if state.fs > 0 else 0.0
+    bpm_txt = (
+        f"{BRED}{BOLD}{state.hr_bpm:5.1f}{RST} BPM"
+        if state.hr_bpm is not None
+        else f"{DIM}--.-{RST} BPM"
+    )
+    hdr = (
+        f" {DIM}{elapsed:>7.1f}s{RST}  "
+        f"{BWHT}{state.fs:>.0f}{RST} Hz  "
+        f"Beat:{bpm_txt}"
+    )
+    a(_line(hdr, W))
+
+    a(_sep(W, " Waveform |a| "))
+    wd = list(state.waveform)
+    if wd:
+        mx = max(max(abs(v) for v in wd), 1e-6)
+        ds = _downsample(wd, GW)
+        a(_line(f"  {GRN}{_sparkline(ds, GW, ceil=mx)}{RST}", W))
+        a(_line(f"  {DIM}peak:{state.latest_peak:.6f}  rms:{state.latest_rms:.6f}  level:{state.level_norm:.2f}{RST}", W))
+    else:
+        a(_line(f"  {DIM}waiting...{RST}", W))
+        a(_line("", W))
+
+    a(_sep(W, f" Top Frequencies {_fmt_hz(state.top_min_hz)}-{_fmt_hz(state.top_max_hz)} (1s) "))
+    if state._have_spectrum:
+        if state.top_freqs:
+            dbs = [db for _, db, _ in state.top_freqs]
+            db_lo = min(dbs)
+            db_hi = max(dbs)
+            if db_hi - db_lo < 1.0:
+                db_hi = db_lo + 1.0
+            bar_w = max(8, min(30, GW - 38))
+            for i in range(state.top_count):
+                if i < len(state.top_freqs):
+                    hz, db, source = state.top_freqs[i]
+                    row = _top_freq_row(
+                        rank=i + 1,
+                        hz=hz,
+                        db=db,
+                        source=source,
+                        db_lo=db_lo,
+                        db_hi=db_hi,
+                        bar_w=bar_w,
+                    )
+                    a(_line(f"  {row}", W))
+                else:
+                    a(_line("", W))
+        else:
+            a(_line(f"  {DIM}accumulating 1s FFT history...{RST}", W))
+            for _ in range(state.top_count - 1):
+                a(_line("", W))
+    else:
+        a(_line(f"  {DIM}accumulating FFT window...{RST}", W))
+        for _ in range(state.top_count - 1):
+            a(_line("", W))
+
+    a(_sep(W, f" Beat History {state.beat_freq_min:.1f}-{state.beat_freq_max:.1f}Hz "))
+    hist = list(state.beat_history)[-6:]
+    if hist:
+        for t_s, raw_hz, track_hz, conf in reversed(hist):
+            age = max(0.0, elapsed - t_s)
+            bpm = track_hz * 60.0
+            c = int(_clamp(conf, 0.0, 1.0) * 100.0)
+            a(
+                _line(
+                    f"  -{age:4.1f}s  raw:{raw_hz:5.2f}Hz  est:{track_hz:5.2f}Hz  bpm:{bpm:6.1f}  conf:{c:3d}%",
+                    W,
+                )
+            )
+    else:
+        a(_line(f"  {DIM}accumulating...{RST}", W))
+
+    a(_sep(W, " BPM Detector "))
+    if state.hr_bpm is not None and state.hr_freq_hz is not None and state.hr_freq_raw is not None:
+        conf = int(_clamp(state.hr_confidence, 0.0, 1.0) * 100.0)
+        a(
+            _line(
+                f"  {BRED}{BOLD}{state.hr_bpm:6.1f} BPM{RST}  "
+                f"{DIM}raw:{state.hr_freq_raw:.3f}Hz  est:{state.hr_freq_hz:.3f}Hz  conf:{conf}%  band:0.6-3.0Hz{RST}",
+                W,
+            )
+        )
+    else:
+        conf = int(_clamp(state.hr_confidence, 0.0, 1.0) * 100.0)
+        a(_line(f"  {DIM}no stable beat  (conf:{conf}%  band:0.6-3.0Hz){RST}", W))
+
+    a(_sep(W, f" Spectrogram FFT {_fmt_hz(state.spec_min_hz)}-{_fmt_hz(state.spec_max_hz)} "))
+    SW = max(12, W - 13)
+    cols = list(state.spec_cols)[-SW:]
+    if cols:
+        if len(cols) < SW:
+            pad_n = SW - len(cols)
+            zero_col = np.full(state.spec_rows, -120.0, dtype=np.float64)
+            cols = [zero_col] * pad_n + cols
+        mat = np.stack(cols, axis=0)  # [time, row]
+        # Global scaling avoids "every row goes red" artifacts from per-row autoscaling.
+        glob_lo = float(np.percentile(mat, 20))
+        glob_hi = float(np.percentile(mat, 99))
+        glob_hi = max(glob_lo + 8.0, glob_hi)
+        for r in range(state.spec_rows - 1, -1, -1):
+            row_fracs = []
+            for col in cols:
+                v = float(col[r]) if r < col.size else -120.0
+                frac = _clamp((v - glob_lo) / (glob_hi - glob_lo), 0.0, 1.0)
+                row_fracs.append(frac)
+            row_vis = _spec_color_row(row_fracs)
+            band_hi = state.spec_edges[r + 1]
+            a(_line(f" {DIM}{band_hi:>6.1f}Hz{RST} {row_vis}", W))
+    else:
+        a(_line(f"  {DIM}accumulating...{RST}", W))
+        for _ in range(state.spec_rows - 1):
+            a(_line("", W))
+
+    a(_sep(W, " RMS Trend 10s "))
+    if state.rms_trend:
+        trend = list(state.rms_trend)
+        ceil = max(1e-9, max(trend))
+        a(_line(f"  {YEL}{_sparkline(trend, GW, ceil=ceil)}{RST}", W))
+    else:
+        a(_line(f"  {DIM}accumulating...{RST}", W))
+
+    a(_sep(W))
+    a(_line(f" {DIM}ctrl+c to quit{RST}", W))
+    a(f"{DIM}└{'─' * W}┘{RST}")
+
+    screen = "\n".join(lines)
+    prefix = (CLEAR + HIDE_CURSOR) if first_frame else HOME
+    sys.stdout.write(prefix + screen)
+    sys.stdout.flush()
+    return False
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    global np
+    try:
+        import numpy as np_module
+        from toolkit.dsp import AdaptiveLevel
+        from toolkit.signal_stream import FloatSignalReader, StreamFormatError
+    except ModuleNotFoundError as exc:
+        print(f"error: missing dependency: {exc}", file=sys.stderr)
+        return 2
+    np = np_module
+
+    if args.fps <= 0:
+        print("error: --fps must be > 0", file=sys.stderr)
+        return 2
+    if args.window_seconds <= 0:
+        print("error: --window-seconds must be > 0", file=sys.stderr)
+        return 2
+    if args.fft_window_seconds <= 0:
+        print("error: --fft-window-seconds must be > 0", file=sys.stderr)
+        return 2
+    if args.spec_rows < 4:
+        print("error: --spec-rows must be >= 4", file=sys.stderr)
+        return 2
+    if args.spec_scroll_hz <= 0:
+        print("error: --spec-scroll-hz must be > 0", file=sys.stderr)
+        return 2
+    if args.spec_min_hz < 0:
+        print("error: --spec-min-hz must be >= 0", file=sys.stderr)
+        return 2
+    if args.spec_max_hz <= 0:
+        print("error: --spec-max-hz must be > 0", file=sys.stderr)
+        return 2
+    if args.spec_max_hz <= args.spec_min_hz:
+        print("error: --spec-max-hz must be > --spec-min-hz", file=sys.stderr)
+        return 2
+    if args.dc_cut_hz < 0:
+        print("error: --dc-cut-hz must be >= 0", file=sys.stderr)
+        return 2
+    if args.chunk_bytes is not None and args.chunk_bytes < 4:
+        print("error: --chunk-bytes must be >= 4", file=sys.stderr)
+        return 2
+
+    try:
+        reader = FloatSignalReader.from_stdin(raw=args.raw, sample_rate=args.rate)
+    except EOFError:
+        return 0
+    except StreamFormatError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    state = LiveStats(
+        fs=reader.sample_rate,
+        window_seconds=args.window_seconds,
+        fft_window_seconds=args.fft_window_seconds,
+        spec_rows=args.spec_rows,
+        spec_scroll_hz=args.spec_scroll_hz,
+        spec_min_hz=args.spec_min_hz,
+        spec_max_hz=args.spec_max_hz,
+        dc_block=(not args.no_dc_block),
+        dc_cut_hz=args.dc_cut_hz,
+    )
+    if args.chunk_bytes is None:
+        # Keep UI responsive across low-rate (accelerometer) and high-rate (audio) streams.
+        target_samples = int(max(32, min(2048, reader.sample_rate * 0.05)))
+        chunk_bytes = max(128, target_samples * 4)
+    else:
+        chunk_bytes = int(args.chunk_bytes)
+
+    level = AdaptiveLevel()
+    first_frame = True
+    last_draw = 0.0
+    draw_dt = 1.0 / args.fps
+
+    try:
+        for chunk in reader.iter_chunks(chunk_bytes=chunk_bytes):
+            if chunk.size == 0:
+                continue
+            raw_chunk = chunk
+            filtered = state.preprocess_chunk(raw_chunk)
+            peak = float(np.max(np.abs(filtered)))
+            dt = float(chunk.size / reader.sample_rate)
+            level_norm = level.update(peak, dt)
+            state.add_chunk(filtered, level_norm=level_norm, beat_source=raw_chunk)
+
+            now = time.monotonic()
+            if now - last_draw >= draw_dt:
+                first_frame = render(state=state, first_frame=first_frame)
+                last_draw = now
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if state.sample_count > 0:
+            render(state=state, first_frame=first_frame)
+        sys.stdout.write("\n" + SHOW_CURSOR)
+        sys.stdout.flush()
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

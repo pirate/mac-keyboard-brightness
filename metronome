@@ -1,0 +1,858 @@
+#!/usr/bin/env python3
+"""Generate metronome pulses: fixed BPM or auto-follow BPM from stdin."""
+
+from __future__ import annotations
+
+import argparse
+import math
+import os
+import signal
+import struct
+import sys
+import time
+from collections import deque
+from pathlib import Path
+
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - optional at runtime
+    np = None
+
+REPO_ROOT = Path(__file__).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
+
+def clamp01(v: float) -> float:
+    return max(0.0, min(1.0, float(v)))
+
+
+class PulseSynth:
+    """Decaying click/tone pulse synthesizer."""
+
+    def __init__(
+        self,
+        *,
+        sample_rate: float,
+        pulse_ms: float,
+        tone_hz: float,
+        level: float,
+        accent_every: int,
+        accent_gain: float,
+    ) -> None:
+        self.fs = float(sample_rate)
+        self.tone_hz = min(float(tone_hz), self.fs * 0.45)
+        self.pulse_frames = max(1, int(round(self.fs * (float(pulse_ms) / 1000.0))))
+        self.decay_denom = max(1.0, self.pulse_frames * 0.33)
+        self.base_amp = clamp01(level)
+        self.accent_every = int(accent_every)
+        self.accent_gain = max(1.0, float(accent_gain))
+
+        self.pulse_left = 0
+        self.pulse_phase = 0
+        self.pulse_amp = self.base_amp
+        self.beat_count = 0
+
+    def trigger(self) -> None:
+        self.beat_count += 1
+        self.pulse_left = self.pulse_frames
+        self.pulse_phase = 0
+        if self.accent_every > 0 and ((self.beat_count - 1) % self.accent_every == 0):
+            self.pulse_amp = clamp01(self.base_amp * self.accent_gain)
+        else:
+            self.pulse_amp = self.base_amp
+
+    def sample(self) -> float:
+        if self.pulse_left <= 0:
+            return 0.0
+        env = math.exp(-float(self.pulse_phase) / self.decay_denom)
+        ang = 2.0 * math.pi * self.tone_hz * (self.pulse_phase / self.fs)
+        v = self.pulse_amp * env * math.sin(ang)
+        self.pulse_left -= 1
+        self.pulse_phase += 1
+        return v
+
+
+class BeatTracker:
+    """Simple onset-based tempo tracker in the 60-170 BPM range."""
+
+    def __init__(
+        self,
+        *,
+        sample_rate: float,
+        min_bpm: float,
+        max_bpm: float,
+        seed_bpm: float | None,
+        detect_low_hz: float,
+        detect_high_hz: float,
+    ) -> None:
+        self.fs = float(sample_rate)
+        self.min_bpm = float(min_bpm)
+        self.max_bpm = float(max_bpm)
+        self.min_interval = 60.0 / self.max_bpm
+        self.max_interval = 60.0 / self.min_bpm
+        # Keep one onset per beat at most; this suppresses half-beat/offbeat
+        # chatter during bootstrap.
+        self.refractory = self.min_interval * 0.78
+        self.detect_low_hz = max(5.0, float(detect_low_hz))
+        self.detect_high_hz = min(float(detect_high_hz), self.fs * 0.45)
+        if self.detect_high_hz <= self.detect_low_hz:
+            self.detect_high_hz = min(self.fs * 0.45, self.detect_low_hz * 1.6)
+
+        # Per-sample first-order HP -> LP detector path.
+        self.hp_alpha = self.fs / (self.fs + 2.0 * math.pi * self.detect_low_hz)
+        self.lp_alpha = (2.0 * math.pi * self.detect_high_hz) / (
+            2.0 * math.pi * self.detect_high_hz + self.fs
+        )
+        self.hp_prev_in = 0.0
+        self.hp_prev_out = 0.0
+        self.lp_prev = 0.0
+
+        # Envelope and onset tracking state.
+        self.fast = 0.0
+        self.slow = 0.0
+        self.noise = 1e-6
+        self.last_onset_t: float | None = None
+        self.onsets: deque[float] = deque(maxlen=48)
+
+        # One-pole coefficients (per sample).
+        self.a_fast_attack = math.exp(-1.0 / (self.fs * 0.010))
+        self.a_fast_release = math.exp(-1.0 / (self.fs * 0.090))
+        self.a_slow = math.exp(-1.0 / (self.fs * 0.650))
+        self.a_noise = math.exp(-1.0 / (self.fs * 0.900))
+
+        # Tempo/phase state.
+        self.period: float | None = (60.0 / seed_bpm) if (seed_bpm and seed_bpm > 0) else None
+        self.next_pred_t: float | None = None
+        self.lock_strength = 0
+        self.upshift_votes = 0
+        self.downshift_votes = 0
+        self.last_detect = 0.0
+
+    def bpm(self) -> float | None:
+        if not self.period:
+            return None
+        return 60.0 / self.period
+
+    def _fold_interval(self, d: float) -> float | None:
+        if d <= 0:
+            return None
+        if self.period is None:
+            while d < self.min_interval and d * 2.0 <= self.max_interval:
+                d *= 2.0
+            while d > self.max_interval and d * 0.5 >= self.min_interval:
+                d *= 0.5
+            if self.min_interval <= d <= self.max_interval:
+                return d
+            return None
+
+        # Snap interval to the nearest integer multiple of current period.
+        # This resists gradual drift from off-beat onsets and missed beats.
+        n = int(round(d / max(1e-6, self.period)))
+        n = max(1, min(4, n))
+        snapped = d / n
+        if not (self.min_interval <= snapped <= self.max_interval):
+            return None
+        expected = self.period * n
+        rel_err = abs(d - expected) / max(1e-6, expected)
+        tol = 0.24 if self.lock_strength < 3 else 0.14
+        if rel_err <= tol:
+            return snapped
+        return None
+
+    def _update_period_from_onsets(self) -> None:
+        if len(self.onsets) < 3:
+            return
+        ints: list[float] = []
+        prev = None
+        for t in list(self.onsets)[-16:]:
+            if prev is not None:
+                folded = self._fold_interval(t - prev)
+                if folded is not None:
+                    ints.append(folded)
+            prev = t
+        if len(ints) < 2:
+            return
+        ints.sort()
+        med = ints[len(ints) // 2]
+        # Early lock: avoid half-time/double-time by checking against observed
+        # onset density over the same window.
+        if len(self.onsets) >= 4:
+            span = self.onsets[-1] - self.onsets[0]
+            if span > 1e-6:
+                onset_bpm = 60.0 * (len(self.onsets) - 1) / span
+                bpm = 60.0 / med
+                low_floor = max(self.min_bpm, onset_bpm * 0.72)
+                high_ceil = min(self.max_bpm, onset_bpm * 1.85)
+                while bpm < low_floor and (bpm * 2.0) <= self.max_bpm:
+                    bpm *= 2.0
+                while bpm > high_ceil and (bpm * 0.5) >= self.min_bpm:
+                    bpm *= 0.5
+                med = 60.0 / bpm
+        if self.period is None:
+            self.period = med
+            self.lock_strength = 1
+        else:
+            # Require repeated evidence before moving to faster tempos in locked
+            # mode; this avoids creeping up from extra transients.
+            if med < (self.period * 0.995):
+                self.upshift_votes = min(6, self.upshift_votes + 1)
+                self.downshift_votes = max(0, self.downshift_votes - 1)
+            elif med > (self.period * 1.005):
+                self.downshift_votes = min(6, self.downshift_votes + 1)
+                self.upshift_votes = max(0, self.upshift_votes - 1)
+            else:
+                self.upshift_votes = max(0, self.upshift_votes - 1)
+                self.downshift_votes = max(0, self.downshift_votes - 1)
+
+            if self.lock_strength >= 3 and med < self.period and self.upshift_votes < 2:
+                med = self.period
+            if self.lock_strength >= 3 and med > self.period and self.downshift_votes < 2:
+                med = self.period
+
+            # Keep BPM changes smooth and bounded; this prevents "bursts then gaps"
+            # from over-reacting to noisy onset spacing.
+            diff = abs(med - self.period) / max(1e-6, self.period)
+            alpha = 0.07
+            max_step_frac = 0.025
+            if self.lock_strength >= 4:
+                alpha = 0.045
+                max_step_frac = 0.012
+            if diff > 0.16:
+                alpha = 0.09
+                max_step_frac = 0.025 if self.lock_strength >= 3 else 0.08
+            if self.lock_strength >= 3 and med < self.period:
+                alpha *= 0.45
+                max_step_frac *= 0.65
+            if self.lock_strength >= 3 and med > self.period:
+                alpha *= 0.45
+                max_step_frac *= 0.65
+            target = self.period + alpha * (med - self.period)
+            max_step = self.period * max_step_frac
+            delta = max(-max_step, min(max_step, target - self.period))
+            self.period += delta
+
+    def step(self, sample: float, t_sec: float, *, suppress_onset: bool = False) -> tuple[bool, bool, float | None]:
+        raw = float(sample)
+        hp = self.hp_alpha * (self.hp_prev_out + raw - self.hp_prev_in)
+        self.hp_prev_in = raw
+        self.hp_prev_out = hp
+        self.lp_prev = self.lp_alpha * hp + (1.0 - self.lp_alpha) * self.lp_prev
+        x = abs(self.lp_prev)
+        self.last_detect = x
+
+        # Fast envelope with separate attack/release.
+        if x > self.fast:
+            self.fast = self.a_fast_attack * self.fast + (1.0 - self.a_fast_attack) * x
+        else:
+            self.fast = self.a_fast_release * self.fast + (1.0 - self.a_fast_release) * x
+
+        self.slow = self.a_slow * self.slow + (1.0 - self.a_slow) * self.fast
+        onset = max(0.0, self.fast - self.slow)
+        self.noise = self.a_noise * self.noise + (1.0 - self.a_noise) * onset
+        thr = max(1e-5, self.noise * 2.7)
+
+        onset_hit = False
+        pred_hit = False
+
+        if onset > thr and not suppress_onset:
+            enough_gap = self.last_onset_t is None or (t_sec - self.last_onset_t) >= self.refractory
+            if enough_gap:
+                phase_ok = True
+                prev_pred = None
+                err = 0.0
+                if self.period is not None and self.next_pred_t is not None:
+                    prev_pred = self.next_pred_t - self.period
+                    while prev_pred + (0.5 * self.period) < t_sec:
+                        prev_pred += self.period
+                    err = t_sec - prev_pred
+                    tol = 0.40 if self.lock_strength < 3 else 0.28
+                    phase_ok = abs(err) <= tol * self.period
+
+                if phase_ok or self.period is None or self.lock_strength <= 1:
+                    onset_hit = True
+                    self.last_onset_t = t_sec
+                    self.onsets.append(t_sec)
+                    self._update_period_from_onsets()
+
+                    if self.period is not None:
+                        if self.next_pred_t is None:
+                            self.next_pred_t = t_sec + self.period
+                        elif prev_pred is not None:
+                            # Tight lock when close, gentler pull when moderately off.
+                            if abs(err) <= 0.18 * self.period:
+                                self.next_pred_t = prev_pred + self.period + (0.22 * err)
+                                self.lock_strength = min(8, self.lock_strength + 1)
+                            elif abs(err) <= 0.36 * self.period:
+                                self.next_pred_t = prev_pred + self.period + (0.34 * err)
+                                self.lock_strength = max(0, self.lock_strength - 1)
+                            else:
+                                # Hard re-lock only when confidence is already low.
+                                if self.lock_strength <= 1:
+                                    self.next_pred_t = t_sec + self.period
+                                self.lock_strength = max(0, self.lock_strength - 2)
+
+        if self.period is not None:
+            if self.next_pred_t is None:
+                self.next_pred_t = t_sec + self.period
+            elif t_sec >= self.next_pred_t:
+                pred_hit = True
+                late = t_sec - self.next_pred_t
+                if late > (2.5 * self.period):
+                    self.next_pred_t = t_sec + self.period
+                else:
+                    while self.next_pred_t is not None and t_sec >= self.next_pred_t:
+                        self.next_pred_t += self.period
+
+        return onset_hit, pred_hit, self.bpm()
+
+
+class AutoCorrTempo:
+    """Short-window tempo estimator for fast lock and drift correction."""
+
+    def __init__(self, *, sample_rate: float, min_bpm: float, max_bpm: float) -> None:
+        self.fs = float(sample_rate)
+        self.min_bpm = float(min_bpm)
+        self.max_bpm = float(max_bpm)
+        self.target_hz = 320.0
+        self.stride = max(1, int(round(self.fs / self.target_hz)))
+        self.env_fs = self.fs / self.stride
+        self.buf = deque(maxlen=max(256, int(self.env_fs * 3.0)))
+        self.acc = 0.0
+        self.count = 0
+        self.smooth = 0.0
+
+    def add(self, x: float) -> None:
+        v = abs(float(x))
+        if v > self.acc:
+            self.acc = v
+        self.count += 1
+        if self.count >= self.stride:
+            # Slight smoothing keeps periodic envelope while reducing chatter.
+            self.smooth = self.smooth * 0.82 + self.acc * 0.18
+            self.buf.append(self.smooth)
+            self.acc = 0.0
+            self.count = 0
+
+    def estimate(self, prior_bpm: float | None) -> tuple[float | None, float]:
+        if np is None:
+            return None, 0.0
+        if len(self.buf) < int(self.env_fs * 1.4):
+            return None, 0.0
+
+        x = np.asarray(self.buf, dtype=np.float64)
+        x -= float(x.mean())
+        energy = float(np.dot(x, x))
+        if energy < 1e-10:
+            return None, 0.0
+
+        ac = np.correlate(x, x, mode="full")[len(x) - 1 :]
+        lag_lo = max(1, int(self.env_fs * 60.0 / self.max_bpm))
+        lag_hi = min(len(ac) - 1, int(self.env_fs * 60.0 / self.min_bpm))
+        if lag_hi <= lag_lo:
+            return None, 0.0
+
+        lags = np.arange(lag_lo, lag_hi + 1, dtype=np.int32)
+        base = ac[lags]
+        score = base.copy()
+
+        # Favor true beat tempo (fundamental) over half-time by supporting
+        # candidates whose subharmonics also correlate.
+        idxh2 = lags // 2
+        m2 = idxh2 >= 1
+        score[m2] += 0.40 * ac[idxh2[m2]]
+        idxh3 = lags // 3
+        m3 = idxh3 >= 1
+        score[m3] += 0.20 * ac[idxh3[m3]]
+
+        if prior_bpm is not None and prior_bpm > 0:
+            prior_lag = (self.env_fs * 60.0) / prior_bpm
+            sigma = max(3.0, 0.28 * prior_lag)
+            prior = np.exp(-0.5 * ((lags - prior_lag) / sigma) ** 2)
+            score *= (0.45 + 0.55 * prior)
+
+        best_i = int(np.argmax(score))
+        best_lag = int(lags[best_i])
+        lag_f = float(best_lag)
+        if 0 < best_i < (score.size - 1):
+            y0 = float(score[best_i - 1])
+            y1 = float(score[best_i])
+            y2 = float(score[best_i + 1])
+            denom = y0 - (2.0 * y1) + y2
+            if abs(denom) > 1e-12:
+                delta = 0.5 * (y0 - y2) / denom
+                delta = max(-0.5, min(0.5, delta))
+                lag_f = float(best_lag) + delta
+        conf = float(max(0.0, min(1.0, score[best_i] / (ac[0] + 1e-12))))
+        bpm = 60.0 * self.env_fs / max(1e-6, lag_f)
+        if not (self.min_bpm <= bpm <= self.max_bpm):
+            return None, conf
+        return bpm, conf
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description=(
+            "Generate metronome pulses. If stdin is piped in, BPM is auto-detected "
+            "(60-170 by default) and followed in real time."
+        )
+    )
+    p.add_argument("bpm", nargs="?", type=float, default=None, help="Fixed BPM (> 0). Optional.")
+    p.add_argument("--rate", type=float, default=44100.0, help="Output sample rate in Hz (fixed mode).")
+    p.add_argument("--pulse-ms", type=float, default=35.0, help="Pulse duration in milliseconds.")
+    p.add_argument("--tone-hz", type=float, default=1200.0, help="Pulse tone frequency in Hz.")
+    p.add_argument("--level", type=float, default=0.8, help="Base pulse amplitude (0..1).")
+    p.add_argument(
+        "--accent-every",
+        type=int,
+        default=4,
+        help="Accent every N beats (set 1 for all beats, <=0 to disable).",
+    )
+    p.add_argument("--accent-gain", type=float, default=1.35, help="Accent amplitude multiplier.")
+    p.add_argument("--block-size", type=int, default=512, help="Frames per emitted chunk.")
+    p.add_argument("--min-bpm", type=float, default=90.0, help="Auto mode minimum BPM.")
+    p.add_argument("--max-bpm", type=float, default=170.0, help="Auto mode maximum BPM.")
+    p.add_argument(
+        "--lock-seconds",
+        type=float,
+        default=3.0,
+        help="Hold silent for at least N seconds while acquiring lock in follow mode.",
+    )
+    p.add_argument(
+        "--detect-low-hz",
+        type=float,
+        default=25.0,
+        help="Beat detector high-pass cutoff (Hz). Raise to ignore rumble.",
+    )
+    p.add_argument(
+        "--detect-high-hz",
+        type=float,
+        default=200.0,
+        help="Beat detector low-pass cutoff (Hz). Lower to ignore click/tone bleed.",
+    )
+    p.add_argument(
+        "--self-echo-ms",
+        type=float,
+        default=180.0,
+        help="Ignore onset candidates for N ms after each metronome click (anti-feedback).",
+    )
+    p.add_argument(
+        "--follow",
+        action="store_true",
+        help="Follow BPM from stdin even when [bpm] is provided (uses bpm as initial seed).",
+    )
+    p.add_argument("--debug", action="store_true", help="Print BPM tracking debug lines to stderr.")
+    p.add_argument("--raw", action="store_true", help="Emit raw float32 without MSIG1 header.")
+    return p.parse_args()
+
+
+def run_fixed(args: argparse.Namespace) -> int:
+    fs = float(args.rate)
+    samples_per_beat = fs * 60.0 / float(args.bpm)
+
+    synth = PulseSynth(
+        sample_rate=fs,
+        pulse_ms=float(args.pulse_ms),
+        tone_hz=float(args.tone_hz),
+        level=float(args.level),
+        accent_every=int(args.accent_every),
+        accent_gain=float(args.accent_gain),
+    )
+
+    if not args.raw:
+        sys.stdout.buffer.write(f"MSIG1 {int(round(fs))}\n".encode("ascii"))
+        sys.stdout.buffer.flush()
+
+    running = True
+
+    def _stop(_sig: int, _frame: object) -> None:
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    sample_index = 0
+    next_beat = 0.0
+    target_t0 = time.monotonic()
+
+    try:
+        while running:
+            chunk = [0.0] * int(args.block_size)
+            for i in range(len(chunk)):
+                while float(sample_index) >= next_beat:
+                    synth.trigger()
+                    next_beat += samples_per_beat
+                chunk[i] = synth.sample()
+                sample_index += 1
+
+            sys.stdout.buffer.write(struct.pack("<%sf" % len(chunk), *chunk))
+            sys.stdout.buffer.flush()
+
+            target_t = target_t0 + (sample_index / fs)
+            sleep_s = target_t - time.monotonic()
+            if sleep_s > 0:
+                time.sleep(min(sleep_s, 0.05))
+
+    except BrokenPipeError:
+        return 0
+
+    return 0
+
+
+def run_follow(args: argparse.Namespace) -> int:
+    try:
+        from toolkit.signal_stream import FloatSignalReader, StreamFormatError
+    except Exception as exc:
+        raise SystemExit(f"metronome follow-mode dependencies unavailable: {exc}") from exc
+
+    try:
+        reader = FloatSignalReader.from_stdin()
+    except EOFError:
+        return 0
+    except StreamFormatError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    fs = float(reader.sample_rate)
+    seed_bpm = float(args.bpm) if args.bpm else None
+    seed_period = (60.0 / seed_bpm) if (seed_bpm and seed_bpm > 0) else None
+    synth = PulseSynth(
+        sample_rate=fs,
+        pulse_ms=float(args.pulse_ms),
+        tone_hz=float(args.tone_hz),
+        level=float(args.level),
+        accent_every=int(args.accent_every),
+        accent_gain=float(args.accent_gain),
+    )
+    tracker = BeatTracker(
+        sample_rate=fs,
+        min_bpm=float(args.min_bpm),
+        max_bpm=float(args.max_bpm),
+        seed_bpm=seed_bpm,
+        detect_low_hz=float(args.detect_low_hz),
+        detect_high_hz=float(args.detect_high_hz),
+    )
+
+    if not args.raw:
+        sys.stdout.buffer.write(f"MSIG1 {int(round(fs))}\n".encode("ascii"))
+        sys.stdout.buffer.flush()
+
+    running = True
+
+    def _stop(_sig: int, _frame: object) -> None:
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    sample_index = 0
+    last_debug = time.monotonic()
+    pred_hits = 0
+    onset_hits = 0
+    trigger_hits = 0
+    last_trigger_t = -1e9
+    last_onset_t = -1e9
+    output_period = tracker.period
+    lock_anchor_period: float | None = tracker.period
+    next_click_t: float | None = None
+    first_t: float | None = None
+    lock_ready_t = float(args.lock_seconds)
+    locked = False
+    lock_votes = 0
+    phase_wait = False
+    phase_wait_started_t = -1e9
+    phase_large_err_votes = 0
+    phase_large_err_sign = 0
+    prev_onset_t: float | None = None
+    tempo_mismatch_votes = 0
+    echo_guard_s = max(0.0, float(args.self_echo_ms) / 1000.0)
+    echo_start_s = 0.012
+    recent_triggers: deque[float] = deque()
+    ac = AutoCorrTempo(sample_rate=fs, min_bpm=float(args.min_bpm), max_bpm=float(args.max_bpm))
+    last_ac_update_t = -1e9
+    ac_bpm = None
+    ac_bpm_smooth = None
+    ac_conf = 0.0
+    total_onsets = 0
+
+    try:
+        for chunk in reader.iter_chunks(chunk_bytes=max(256, int(args.block_size) * 4)):
+            if not running:
+                break
+            out = [0.0] * len(chunk)
+            for i, s in enumerate(chunk):
+                t = sample_index / fs
+                if first_t is None:
+                    first_t = t
+                    lock_ready_t = t + max(0.0, float(args.lock_seconds))
+                period = tracker.period if tracker.period is not None else (60.0 / ((args.min_bpm + args.max_bpm) * 0.5))
+                while recent_triggers and (t - recent_triggers[0]) > (echo_guard_s + 0.05):
+                    recent_triggers.popleft()
+                suppress_active = any(echo_start_s <= (t - rt) <= echo_guard_s for rt in recent_triggers)
+                onset, pred, bpm = tracker.step(float(s), t, suppress_onset=suppress_active)
+                ac.add(tracker.last_detect if not suppress_active else 0.0)
+                if (t - last_ac_update_t) >= 0.35:
+                    track_bpm_now = tracker.bpm()
+                    ac_est, ac_conf = ac.estimate(track_bpm_now)
+                    accept_ac = False
+                    conf_min = 0.14 if not locked else 0.18
+                    if ac_est is not None and ac_conf >= conf_min:
+                        accept_ac = True
+                        if track_bpm_now is not None and track_bpm_now > 0:
+                            rel_track = abs(ac_est - track_bpm_now) / track_bpm_now
+                            if locked and rel_track > 0.08:
+                                accept_ac = False
+                            elif (not locked) and tracker.lock_strength >= 2 and rel_track > 0.22:
+                                accept_ac = False
+                            elif tracker.lock_strength >= 2 and rel_track > 0.18:
+                                accept_ac = False
+                        if (not locked) and args.bpm is not None and float(args.bpm) > 0:
+                            rel_seed = abs(ac_est - float(args.bpm)) / float(args.bpm)
+                            if rel_seed > 0.08:
+                                accept_ac = False
+                        if locked and ac_bpm is not None and ac_bpm > 0:
+                            rel_prev_ac = abs(ac_est - ac_bpm) / ac_bpm
+                            if rel_prev_ac > 0.18:
+                                accept_ac = False
+
+                    if accept_ac:
+                        if ac_bpm_smooth is None:
+                            ac_bpm_smooth = ac_est
+                        else:
+                            max_delta = 2.4 if not locked else 2.0
+                            delta = ac_est - ac_bpm_smooth
+                            if delta > max_delta:
+                                delta = max_delta
+                            elif delta < -max_delta:
+                                delta = -max_delta
+                            ac_bpm_smooth += delta
+                        ac_bpm = ac_bpm_smooth
+                        ac_period = 60.0 / ac_bpm
+                        if tracker.period is None:
+                            tracker.period = ac_period
+                            tracker.next_pred_t = t + ac_period
+                            tracker.lock_strength = max(1, tracker.lock_strength)
+                        else:
+                            rel = abs(ac_period - tracker.period) / max(1e-6, tracker.period)
+                            blend = 0.18 if tracker.lock_strength < 3 else 0.07
+                            if rel > 0.14:
+                                blend = max(blend, 0.10)
+                            if locked:
+                                blend = min(blend, 0.03)
+                            step = (ac_period - tracker.period) * blend
+                            if locked:
+                                max_step = tracker.period * 0.006
+                                step = max(-max_step, min(max_step, step))
+                            tracker.period += step
+                            if tracker.next_pred_t is not None:
+                                while tracker.next_pred_t < (t - tracker.period):
+                                    tracker.next_pred_t += tracker.period
+                        if locked and output_period is not None:
+                            out_bpm = 60.0 / max(1e-6, output_period)
+                            rel_out = abs(ac_est - out_bpm) / max(1e-6, out_bpm)
+                            if rel_out > 0.045:
+                                tempo_mismatch_votes = min(12, tempo_mismatch_votes + 1)
+                            else:
+                                tempo_mismatch_votes = max(0, tempo_mismatch_votes - 1)
+                            if tempo_mismatch_votes >= 7:
+                                new_period = 60.0 / ((0.80 * ac_est) + (0.20 * out_bpm))
+                                tracker.period = new_period
+                                output_period = new_period
+                                lock_anchor_period = new_period
+                                next_click_t = None
+                                phase_wait = True
+                                phase_wait_started_t = t
+                                tempo_mismatch_votes = 0
+                    last_ac_update_t = t
+                if onset:
+                    onset_hits += 1
+                    total_onsets += 1
+                    prev_onset_t = last_onset_t if last_onset_t > -1e8 else None
+                    last_onset_t = t
+                if pred:
+                    pred_hits += 1
+
+                should_trigger = False
+                track_bpm = tracker.bpm()
+                if not locked and t >= lock_ready_t and track_bpm is not None and total_onsets >= 3:
+                    agree = False
+                    agree_tol = 0.08 if args.bpm is not None else 0.10
+                    if ac_bpm is not None:
+                        rel = abs(track_bpm - ac_bpm) / max(1e-6, track_bpm)
+                        agree = rel <= agree_tol
+                    elif args.bpm is not None:
+                        rel = abs(track_bpm - float(args.bpm)) / max(1e-6, float(args.bpm))
+                        agree = rel <= 0.08
+                    if agree and tracker.lock_strength >= 1:
+                        lock_votes = min(8, lock_votes + 1)
+                    else:
+                        lock_votes = max(0, lock_votes - 1)
+                    if lock_votes >= 3:
+                        locked = True
+                        if ac_bpm is not None and track_bpm is not None:
+                            if args.bpm is not None:
+                                lock_bpm = (0.75 * ac_bpm) + (0.25 * track_bpm)
+                                lock_bpm = (0.55 * lock_bpm) + (0.45 * float(args.bpm))
+                            else:
+                                lock_bpm = (0.90 * ac_bpm) + (0.10 * track_bpm)
+                            tracker.period = 60.0 / lock_bpm
+                        lock_anchor_period = tracker.period
+                        output_period = tracker.period
+                        # Wait for a fresh onset to anchor phase; this avoids
+                        # starting the click train at an arbitrary offset.
+                        next_click_t = None
+                        phase_wait = True
+                        phase_wait_started_t = t
+                if (not locked) and track_bpm is not None and total_onsets >= 3 and t >= (lock_ready_t + 3.0):
+                    # Fallback lock to avoid getting stuck in acquiring when AC is noisy.
+                    can_fallback_lock = True
+                    if ac_bpm is not None and track_bpm > 0:
+                        # Avoid half-time fallback when AC indicates a faster groove.
+                        if ac_bpm > (track_bpm * 1.18):
+                            can_fallback_lock = False
+                    if can_fallback_lock:
+                        locked = True
+                        tracker.period = 60.0 / track_bpm
+                        lock_anchor_period = tracker.period
+                        output_period = tracker.period
+                        next_click_t = None
+                        phase_wait = True
+                        phase_wait_started_t = t
+
+                if locked and tracker.period is not None:
+                    if seed_period is not None:
+                        lo = seed_period * 0.965
+                        hi = seed_period * 1.035
+                        if tracker.period < lo:
+                            tracker.period = lo
+                        elif tracker.period > hi:
+                            tracker.period = hi
+                        a_seed = math.exp(-1.0 / (fs * 7.0))
+                        tracker.period = (a_seed * tracker.period) + ((1.0 - a_seed) * seed_period)
+
+                    # Locked mode: emit from a stable click clock and use onsets
+                    # only to nudge phase; never "catch up" with burst clicks.
+                    period_target = tracker.period
+                    if ac_bpm is not None and ac_conf >= 0.14:
+                        ac_period = 60.0 / ac_bpm
+                        rel = abs(ac_period - tracker.period) / max(1e-6, tracker.period)
+                        if seed_period is None:
+                            w_ac = 0.88 if rel <= 0.15 else 0.95
+                        else:
+                            w_ac = 0.65 if rel <= 0.12 else 0.85
+                        period_target = (tracker.period * (1.0 - w_ac)) + (ac_period * w_ac)
+                    if seed_period is not None:
+                        period_target = (0.70 * period_target) + (0.30 * seed_period)
+                    if output_period is None:
+                        output_period = period_target
+                    else:
+                        a = math.exp(-1.0 / (fs * 1.9))
+                        output_period = (a * output_period) + ((1.0 - a) * period_target)
+
+                    if phase_wait:
+                        # Start only once we have a newly observed beat onset.
+                        if onset:
+                            next_click_t = t + output_period
+                            phase_wait = False
+                            # Anchor first audible click exactly on this beat.
+                            should_trigger = True
+                            phase_large_err_votes = 0
+                            phase_large_err_sign = 0
+                        elif (t - phase_wait_started_t) > (2.2 * output_period):
+                            # Fallback so we don't stall forever on sparse material.
+                            next_click_t = t + output_period
+                            phase_wait = False
+                    elif next_click_t is None:
+                        next_click_t = t + output_period
+
+                    # After initial phase anchor, avoid strong onset-driven phase
+                    # nudges; they are often biased by transient shape and can
+                    # accumulate into half-beat drift on steady dance tracks.
+                    if onset and next_click_t is not None:
+                        beat_ref = next_click_t - output_period
+                        e_prev = t - beat_ref
+                        e_next = t - next_click_t
+                        err = e_prev if abs(e_prev) <= abs(e_next) else e_next
+                        if abs(err) <= 0.10 * output_period:
+                            next_click_t += 0.04 * err
+
+                    min_space = max(0.24, 0.95 * output_period)
+                    if next_click_t is not None and t >= next_click_t:
+                        if (t - last_trigger_t) >= min_space:
+                            should_trigger = True
+                        while next_click_t <= t:
+                            next_click_t += output_period
+
+                if should_trigger:
+                    synth.trigger()
+                    trigger_hits += 1
+                    last_trigger_t = t
+                    recent_triggers.append(t)
+
+                out[i] = synth.sample()
+                sample_index += 1
+
+            sys.stdout.buffer.write(struct.pack("<%sf" % len(out), *out))
+            sys.stdout.buffer.flush()
+
+            if args.debug:
+                now = time.monotonic()
+                if now - last_debug >= 1.0:
+                    est = tracker.bpm()
+                    bpm_txt = f"{est:.1f}" if est is not None else "-"
+                    ac_txt = f"{ac_bpm:.1f}" if ac_bpm is not None else "-"
+                    state = "locked" if locked else "acquiring"
+                    wait_s = max(0.0, lock_ready_t - t)
+                    print(
+                        f"[metronome] mode=follow state={state} wait={wait_s:.1f}s bpm={bpm_txt} ac={ac_txt} onset={onset_hits} pred={pred_hits} trig={trigger_hits}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    onset_hits = 0
+                    pred_hits = 0
+                    trigger_hits = 0
+                    last_debug = now
+
+    except BrokenPipeError:
+        return 0
+
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+
+    if args.rate <= 0:
+        raise SystemExit("--rate must be > 0")
+    if args.pulse_ms <= 0:
+        raise SystemExit("--pulse-ms must be > 0")
+    if args.tone_hz <= 0:
+        raise SystemExit("--tone-hz must be > 0")
+    if args.block_size <= 0:
+        raise SystemExit("--block-size must be > 0")
+    if args.lock_seconds < 0:
+        raise SystemExit("--lock-seconds must be >= 0")
+    if args.min_bpm <= 0 or args.max_bpm <= 0 or args.max_bpm <= args.min_bpm:
+        raise SystemExit("require 0 < --min-bpm < --max-bpm")
+    if args.bpm is not None and args.bpm <= 0:
+        raise SystemExit("bpm must be > 0")
+
+    stdin_piped = not os.isatty(sys.stdin.fileno())
+
+    # Follow mode when explicitly requested, or when stdin is piped and bpm is omitted.
+    if args.follow or (stdin_piped and args.bpm is None):
+        return run_follow(args)
+
+    if args.bpm is None:
+        raise SystemExit("provide [bpm] for fixed mode, or pipe input for auto-follow mode")
+    return run_fixed(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
