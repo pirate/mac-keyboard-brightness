@@ -20,7 +20,7 @@ for _p in (LIB_ROOT, REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from toolkit.bootstrap import maybe_reexec_venv
+from bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 

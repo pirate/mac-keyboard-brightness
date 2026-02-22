@@ -18,7 +18,7 @@ for _p in (LIB_ROOT, ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from toolkit.bootstrap import maybe_reexec_venv
+from bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -840,8 +840,8 @@ def main() -> int:
     global np
     try:
         import numpy as np_module
-        from toolkit.dsp import AdaptiveLevel
-        from toolkit.signal_stream import FloatSignalReader, StreamFormatError
+        from dsp import AdaptiveLevel
+        from signal_stream import FloatSignalReader, StreamFormatError
     except ModuleNotFoundError as exc:
         print(f"error: missing dependency: {exc}", file=sys.stderr)
         return 2

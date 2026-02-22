@@ -1,3 +1,0 @@
-numpy>=1.26
-sounddevice>=0.4
-PyWavelets>=1.4

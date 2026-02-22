@@ -13,7 +13,7 @@ for _p in (LIB_ROOT, ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from toolkit.bootstrap import maybe_reexec_venv
+from bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -50,8 +50,8 @@ def main() -> int:
     args = build_parser().parse_args()
 
     try:
-        from toolkit.dsp import ChunkFrequencyScaler
-        from toolkit.signal_stream import (
+        from dsp import ChunkFrequencyScaler
+        from signal_stream import (
             FloatSignalReader,
             FloatSignalWriter,
             StreamFormatError,

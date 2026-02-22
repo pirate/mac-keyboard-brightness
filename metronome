@@ -24,7 +24,7 @@ for _p in (LIB_ROOT, REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from toolkit.bootstrap import maybe_reexec_venv
+from bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -522,7 +522,7 @@ def run_fixed(args: argparse.Namespace) -> int:
 
 def run_follow(args: argparse.Namespace) -> int:
     try:
-        from toolkit.signal_stream import FloatSignalReader, StreamFormatError
+        from signal_stream import FloatSignalReader, StreamFormatError
     except Exception as exc:
         raise SystemExit(f"metronome follow-mode dependencies unavailable: {exc}") from exc
 

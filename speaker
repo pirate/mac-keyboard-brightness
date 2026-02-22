@@ -13,7 +13,7 @@ for _p in (LIB_ROOT, REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from toolkit.bootstrap import maybe_reexec_venv
+from bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -46,8 +46,8 @@ def main() -> int:
         raise SystemExit(f"numpy is required: {exc}") from exc
 
     try:
-        from toolkit.dsp import LinearResampler
-        from toolkit.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
+        from dsp import LinearResampler
+        from signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"speaker dependencies unavailable: {exc}") from exc
 
