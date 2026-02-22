@@ -1,0 +1,55 @@
+lib/signal_stream.py
+  94f9d54350729099 1-183
+heartbeat
+  94f9d54350729099 17,88-89
+accelerometer
+  94f9d54350729099 23
+lib/hardware.py
+  94f9d54350729099 1-627
+microphone
+  94f9d54350729099 17,83
+visualizer
+  94f9d54350729099 21,843-844
+keyboard-brightness
+  94f9d54350729099 19,194-195
+bandpass
+  94f9d54350729099 16,75-76
+fan-speed
+  94f9d54350729099 19,217-218
+sine
+  94f9d54350729099 17,83
+frequency-shift
+  94f9d54350729099 16,53-54
+lib/bootstrap.py
+  94f9d54350729099 1-57
+lib/dsp.py
+  94f9d54350729099 1-201
+screen-brightness
+  94f9d54350729099 19,152-153
+speaker
+  94f9d54350729099 16,49-50
+volume-shift
+  94f9d54350729099 16,51
+metronome
+  94f9d54350729099 27,525
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "e72422ef390d24325b59ecb5f2b8ca275f6950a7",
+  "prompts": {
+    "94f9d54350729099": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019c7eeb-8c93-78b2-8937-53b2c1e3bb2b",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>",
+      "messages": [],
+      "total_additions": 1101,
+      "total_deletions": 35,
+      "accepted_lines": 1101,
+      "overriden_lines": 0
+    }
+  }
+}
