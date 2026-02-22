@@ -1,10 +1,10 @@
-# Use your Mac's hardware inputs/outputs like a modular synth!
+# Use your Mac's hardware as modular synth building blocks!
 
-A suite of tools like `accelerometer`, `microphone`, `keyboard-brightness`, `screen-brightness`, and more that can be linked together using UNIX pipes.
+A suite of commands like `accelerometer`, `microphone`, `bandpass`, `keyboard-brightness`, `screen-brightness`, and more that can be linked together using UNIX pipes.
 
 All tools input and output a standardized mono audio signal that represents their sensor input/output values.
 
-## quick start
+## Quickstart
 
 ```bash
 git clone https://github.com/olvvier/apple-silicon-accelerometer
@@ -32,63 +32,75 @@ sudo accelerometer \
 
 ## Tools
 
-### source commands
+### `accelerometer`
 
-1. `accelerometer`
 - Purpose: read Apple SPU accelerometer and emit mono signal.
 - Args: `--rate <hz>` (<= 800), `--axis x|y|z|mag`, `--raw`.
 - Notes: requires `sudo`.
 
-2. `microphone`
+### `microphone`
+
 - Purpose: capture mono mic signal and emit stream.
 - Args: `--rate <hz>`, `--block-size <frames>`.
 
-3. `metronome [bpm]`
+### `metronome [bpm]`
+
 - Purpose: emit metronome pulses; with piped stdin it auto-detects/follows BPM.
 - Args: optional `bpm`, `--rate` (fixed mode), `--pulse-ms`, `--tone-hz`, `--level`, `--accent-every`, `--accent-gain`, `--block-size`, `--min-bpm`, `--max-bpm`, `--detect-low-hz`, `--detect-high-hz`, `--self-echo-ms`, `--follow`, `--debug`, `--raw`.
 
-### processor / analysis commands
+---
 
-4. `bandpass <low_hz> <high_hz>`
+### `bandpass <low_hz> <high_hz>`
+
 - Purpose: realtime cascaded high/low-pass filter.
 - Args: positional cutoffs or `--low/--high`, `--chunk-bytes`, `--raw --rate`.
 
-5. `frequency-shift <factor>`
-- Purpose: best-effort realtime frequency scaling.
+### `frequency-shift <factor>`
+
+- Purpose: best-effort realtime frequency scaling, takes a scalar multiplier like 0.1~1000.
 - Args: `factor`, `--chunk-bytes`, `--raw --rate`.
 
-6. `volume-shift <gain>`
+### `volume-shift <gain>`
+
 - Purpose: scalar amplitude gain.
 - Args: `gain`, `--chunk-bytes`, `--raw --rate`.
 
-7. `heartbeat`
+### `heartbeat`
+
 - Purpose: emit BPM/confidence JSON lines from incoming signal (typically bandpassed).
 - Args: `--interval`, `--window-seconds`, `--emit-final`, `--chunk-bytes`, `--raw --rate`.
 
-### output / sink commands
+---
 
-8. `speaker`
+### `speaker`
+
 - Purpose: play incoming stream on default output device.
 - Args: `--device-rate`, `--block-size`.
 
-9. `visualizer`
+### `visualizer`
+
 - Purpose: terminal waveform + level monitor.
 - Args: `--fps`, `--window-seconds`, `--chunk-bytes`, `--raw --rate`.
 
-10. `keyboard-brightness`
+### `keyboard-brightness`
+
 - Purpose: beat-follow keyboard backlight control.
 - Args: `--send-hz`, `--fade-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--as-root`.
 - Alias: `keyboad-brightness` (compat typo alias).
 
-11. `screen-brightness`
+###  `screen-brightness`
+
 - Purpose: beat-follow display brightness control.
 - Args: `--send-hz`, `--min-level`, `--max-level`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`.
 
-12. `fan-speed`
+### `fan-speed`
+
 - Purpose: signal-follow fan RPM control (both fans in sync by default; beat-alternating optional).
 - Args: `--send-hz`, `--min-rpm`, `--max-rpm`, `--min-frac`, `--max-frac`, `--pulse-depth`, `--couple`, `--alternate`, `--input-map`, `--beat-threshold`, `--beat-hold-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`.
 
-## mix-and-match recipes
+---
+
+## Example Usage
 
 Heartbeat from accelerometer:
 
@@ -111,16 +123,16 @@ Metronome to speakers:
 metronome 120 | speaker
 ```
 
-Auto-follow metronome from mic input:
+Auto-follow metronome from mic input, emits a metronome tone in sync with the beat of whatever audio is playing:
 
 ```bash
-microphone --rate 44100 | metronome | speaker
+microphone | metronome | speaker
 ```
 
 Metronome driving keyboard pulses:
 
 ```bash
-metronome 120 | keyboard-brightness --send-hz 24 --fade-ms 20
+metronome 120 | keyboard-brightness
 ```
 
 Metronome driving fan pulses:
@@ -146,7 +158,9 @@ sudo accelerometer \
   | speaker
 ```
 
-## practical notes
+---
+
+## Notes
 
 - `accelerometer` requires root (AppleSPU HID access).
 - `microphone`/`speaker` depend on `sounddevice` + PortAudio runtime.
@@ -154,7 +168,7 @@ sudo accelerometer \
 - `fan-speed` uses AppleSMC private IOKit APIs on Apple Silicon; writing fan targets typically requires `sudo`.
 - `frequency-shift` is intentionally lightweight and artifact-prone at extreme factors.
 
-## stream model
+## Stdio Audio Format
 
 All stream tools read/write:
 
@@ -163,19 +177,21 @@ All stream tools read/write:
 
 Most processors also support raw float32 input via `--raw --rate <hz>`.
 
+---
+
 ## Why?
 
-It's fun.  Here are some ideas:
+It's fun. Here are some ideas to get started:
 
- - make a bitbar menubar app to control keyboard brightness
  - make your keyboard lights flash for security alerts using [Security Growler](https://github.com/pirate/security-growler)
  - make your keyboard flash right before your display is about to sleep
  - make your keyboard flash on incoming email
  - make your keyboard flash to the beat of music
  - make your keyboard flash when your boss's iPhone comes within bluetooth range
 
+---
 
-## links
+## Related Projects
 
 - https://github.com/olvvier/apple-silicon-accelerometer IOReg accelerometer reading code
 - https://github.com/EthanRDoesMC/KBPulse/ keyboard brightness code for M1, M2, M3, etc. macs
