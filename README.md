@@ -148,10 +148,6 @@ sudo accelerometer \
 - `fan-speed` uses AppleSMC private IOKit APIs on Apple Silicon; writing fan targets typically requires `sudo`.
 - `frequency-shift` is intentionally lightweight and artifact-prone at extreme factors.
 
-## legacy script
-
-`motion_live.py` remains available, but primary usage is top-level commands in this repo.
-
 ## license
 
 MIT
