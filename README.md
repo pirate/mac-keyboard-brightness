@@ -1,4 +1,4 @@
-# Use your Mac's hardware as modular synth building blocks!
+# Use your Mac hardware like a modular synth!
 
 A suite of commands like `accelerometer`, `microphone`, `bandpass`, `keyboard-brightness`, `screen-brightness`, and more that can be linked together using UNIX pipes.
 
