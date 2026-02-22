@@ -12,8 +12,7 @@ cd apple-silicon-accelerometer
 
 uv venv
 source .venv/bin/activate
-uv pip install -r lib/requirements.txt
-export PATH="$PWD:$PATH"
+uv sync
 
 # flash the keyboard according to your heartbeat (keep your wrists on palm rests)
 sudo accelerometer \
