@@ -1,30 +1,27 @@
-# apple-silicon-accelerometer
+# Use your Mac's hardware inputs/outputs like a modular synth!
 
-A modular, pipe-able macOS hardware signal toolkit with runnable commands at repo top-level.
+A suite of tools like `accelerometer`, `microphone`, `keyboard-brightness`, `screen-brightness`, and more that can be linked together using UNIX pipes.
 
-Everything speaks one stream format so tools can be mixed freely in UNIX pipelines.
+All tools input and output a standardized mono audio signal that represents their sensor input/output values.
 
 ## quick start
 
 ```bash
 git clone https://github.com/olvvier/apple-silicon-accelerometer
 cd apple-silicon-accelerometer
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
+
+uv venv
+uv pip install -r requirements.txt
 export PATH="$PWD:$PATH"
 ```
 
-## stream model
+![Flashing keyboard gif](https://i.imgur.com/AS6tTre.gif)
+![Flashing display gif](https://i.imgur.com/cRFsoDM.gif)
 
-All stream tools read/write:
 
-- header: `MSIG1 <sample_rate_hz>\n`
-- payload: little-endian `float32` mono samples
+<img width="1004" height="665" alt="Screenshot 2026-02-20 at 11 19 36 PM" src="https://github.com/user-attachments/assets/c30f02b1-2695-4e5f-9724-e01986ba799d" />
 
-Most processors also support raw float32 input via `--raw --rate <hz>`.
-
-## command reference
+## Tools
 
 ### source commands
 
@@ -148,9 +145,26 @@ sudo accelerometer \
 - `fan-speed` uses AppleSMC private IOKit APIs on Apple Silicon; writing fan targets typically requires `sudo`.
 - `frequency-shift` is intentionally lightweight and artifact-prone at extreme factors.
 
-## legacy script
+## stream model
 
-`motion_live.py` remains available, but primary usage is top-level commands in this repo.
+All stream tools read/write:
+
+- header: `MSIG1 <sample_rate_hz>\n`
+- payload: little-endian `float32` mono samples
+
+Most processors also support raw float32 input via `--raw --rate <hz>`.
+
+## Why?
+
+It's fun.  Here are some ideas:
+
+ - make a bitbar menubar app to control keyboard brightness
+ - make your keyboard lights flash for security alerts using [Security Growler](https://github.com/pirate/security-growler)
+ - make your keyboard flash right before your display is about to sleep
+ - make your keyboard flash on incoming email
+ - make your keyboard flash to the beat of music
+ - make your keyboard flash when your boss's iPhone comes within bluetooth range
+
 
 ## license
 
@@ -158,5 +172,13 @@ MIT
 
 ## links
 
-- apple silicon accelerometer: https://github.com/olvvier/apple-silicon-accelerometer
-- KBPulse: https://github.com/EthanRDoesMC/KBPulse/
+- https://github.com/olvvier/apple-silicon-accelerometer IOReg accelerometer reading code
+- https://github.com/EthanRDoesMC/KBPulse/ keyboard brightness code for M1, M2, M3, etc. macs
+- https://github.com/maxmouchet/LightKit control keyboard and screen brightness via Swift
+- https://github.com/tcr/macbook-brightness (the core brightness code is copied from @tcr's, but separated into two cli utils)
+- http://stackoverflow.com/questions/3239749/programmatically-change-mac-display-brightness
+- https://web.archive.org/web/20110828210316/http://mattdanger.net:80/2008/12/adjust-mac-os-x-display-brightness-from-the-terminal/
+- http://osxbook.com/book/bonus/chapter10/light/
+- https://github.com/samnung/maclight/blob/master/lights_handle.cpp
+- http://www.keindesign.de/stefan/Web/Sites/iWeb/Site/iSpazz.html
+- https://github.com/bhoeting/DiscoKeyboard
