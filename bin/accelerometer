@@ -9,6 +9,7 @@ import multiprocessing
 from multiprocessing import shared_memory
 import os
 import signal
+import struct
 import sys
 import time
 from pathlib import Path
@@ -17,7 +18,44 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
 NATIVE_RATE_HZ = 800.0
+
+
+class LinearResampler:
+    """Minimal streaming linear resampler without external deps."""
+
+    def __init__(self, input_rate: float, output_rate: float) -> None:
+        if input_rate <= 0 or output_rate <= 0:
+            raise ValueError("sample rates must be > 0")
+        self.step = float(input_rate) / float(output_rate)
+        self.buf: list[float] = []
+        self.pos = 0.0
+
+    def process(self, samples: list[float]) -> list[float]:
+        if samples:
+            self.buf.extend(float(s) for s in samples)
+        if len(self.buf) < 2:
+            return []
+
+        out: list[float] = []
+        max_pos = len(self.buf) - 1
+        while self.pos < max_pos:
+            i = int(self.pos)
+            frac = self.pos - i
+            a = self.buf[i]
+            b = self.buf[i + 1]
+            out.append(a + (b - a) * frac)
+            self.pos += self.step
+
+        trim = int(self.pos)
+        if trim > 0:
+            self.buf = self.buf[trim:]
+            self.pos -= trim
+        return out
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +74,11 @@ def parse_args() -> argparse.Namespace:
         default="mag",
         help="Axis to output as mono signal (default: mag).",
     )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Emit raw float32 payload without MSIG1 header.",
+    )
     return parser.parse_args()
 
 
@@ -45,17 +88,25 @@ def require_root() -> None:
         raise SystemExit(f"{prog}: requires root. Run with: sudo {sys.argv[0]}")
 
 
-def pick_axis(xyz: np.ndarray, axis: str) -> np.ndarray:
-    import numpy as np
-
+def extract_axis(samples: list[tuple[float, float, float]], axis: str) -> list[float]:
     if axis == "x":
-        return xyz[:, 0]
+        return [x for x, _, _ in samples]
     if axis == "y":
-        return xyz[:, 1]
+        return [y for _, y, _ in samples]
     if axis == "z":
-        return xyz[:, 2]
-    energy = np.sum(xyz * xyz, axis=1, dtype=np.float32)
-    return np.sqrt(energy, out=np.empty(energy.shape, dtype=np.float32))
+        return [z for _, _, z in samples]
+    return [math.sqrt(x * x + y * y + z * z) for x, y, z in samples]
+
+
+def write_header(sample_rate: float) -> None:
+    sys.stdout.buffer.write(f"MSIG1 {int(round(sample_rate))}\n".encode("ascii"))
+    sys.stdout.buffer.flush()
+
+
+def write_f32(samples: list[float]) -> None:
+    if not samples:
+        return
+    sys.stdout.buffer.write(struct.pack("<%sf" % len(samples), *samples))
 
 
 def main() -> int:
@@ -64,14 +115,7 @@ def main() -> int:
         raise SystemExit("--rate must satisfy: 0 < rate <= 800")
 
     try:
-        import numpy as np
-    except Exception as exc:
-        raise SystemExit(f"numpy is required: {exc}") from exc
-
-    try:
         from spu_sensor import SHM_SIZE, sensor_worker, shm_read_new
-        from toolkit.dsp import LinearResampler
-        from toolkit.signal_stream import FloatSignalWriter
     except Exception as exc:
         raise SystemExit(f"accelerometer dependencies unavailable: {exc}") from exc
 
@@ -79,15 +123,21 @@ def main() -> int:
 
     decimate = max(1, int(math.floor(NATIVE_RATE_HZ / float(args.rate))))
     worker_rate = NATIVE_RATE_HZ / float(decimate)
-    needs_resample = abs(worker_rate - args.rate) > 1e-6
-    resampler = LinearResampler(worker_rate, float(args.rate)) if needs_resample else None
+    resampler = (
+        LinearResampler(worker_rate, float(args.rate))
+        if abs(worker_rate - args.rate) > 1e-6
+        else None
+    )
 
     shm = shared_memory.SharedMemory(create=True, size=SHM_SIZE)
-    shm.buf[:] = b"\x00" * SHM_SIZE
+    for i in range(SHM_SIZE):
+        shm.buf[i] = 0
     worker: multiprocessing.Process | None = None
     last_total = 0
     running = True
-    writer = FloatSignalWriter.to_stdout(sample_rate=float(args.rate))
+
+    if not args.raw:
+        write_header(float(args.rate))
 
     def _stop(_sig: int, _frame: object) -> None:
         nonlocal running
@@ -110,15 +160,14 @@ def main() -> int:
 
             samples, last_total = shm_read_new(shm.buf, last_total)
             if not samples:
-                time.sleep(0.002)
+                time.sleep(0.001)
                 continue
 
-            xyz = np.asarray(samples, dtype=np.float32)
-            mono = pick_axis(xyz, args.axis)
+            mono = extract_axis(samples, args.axis)
             out = resampler.process(mono) if resampler is not None else mono
-            if out.size:
-                writer.write(out)
-                writer.flush()
+            if out:
+                write_f32(out)
+                sys.stdout.buffer.flush()
 
     except BrokenPipeError:
         pass

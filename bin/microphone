@@ -12,10 +12,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Capture mono float32 from default microphone and write MSIG1 stream."
+    )
+    parser.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="List available audio devices and exit.",
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Input device index or name substring (default: system default input).",
     )
     parser.add_argument(
         "--rate",
@@ -32,12 +46,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_input_rate(sd: object, requested: float | None) -> float:
+def _parse_device_token(token: str | None) -> object:
+    if token is None:
+        return None
+    t = str(token).strip()
+    if not t:
+        return None
+    if t.isdigit():
+        return int(t)
+    return t
+
+
+def resolve_input_rate(sd: object, requested: float | None, device: object) -> float:
     if requested is not None:
         if requested <= 0:
             raise SystemExit("--rate must be > 0")
         return float(requested)
-    info = sd.query_devices(None, "input")
+    info = sd.query_devices(device, "input")
     rate = float(info.get("default_samplerate", 0.0) or 0.0)
     if rate <= 0:
         return 48000.0
@@ -62,7 +87,12 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"sounddevice is required: {exc}") from exc
 
-    rate = resolve_input_rate(sd, args.rate)
+    if args.list_devices:
+        print(sd.query_devices())
+        return 0
+
+    device = _parse_device_token(args.device)
+    rate = resolve_input_rate(sd, args.rate, device)
     q: queue.Queue[np.ndarray] = queue.Queue(maxsize=32)
     writer = FloatSignalWriter.to_stdout(sample_rate=rate)
 
@@ -84,6 +114,7 @@ def main() -> int:
 
     try:
         with sd.InputStream(
+            device=device,
             channels=1,
             samplerate=rate,
             dtype="float32",

@@ -11,6 +11,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -41,7 +45,7 @@ def main() -> int:
 
     try:
         from toolkit.dsp import LinearResampler
-        from toolkit.signal_stream import FloatSignalReader, is_tty_stdin
+        from toolkit.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"speaker dependencies unavailable: {exc}") from exc
 
@@ -53,7 +57,10 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"sounddevice is required: {exc}") from exc
 
-    reader = FloatSignalReader.from_stdin()
+    try:
+        reader = FloatSignalReader.from_stdin()
+    except (EOFError, StreamFormatError):
+        return 0
     input_rate = float(reader.sample_rate)
 
     if args.device_rate is not None:

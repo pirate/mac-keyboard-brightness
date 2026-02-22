@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -66,7 +70,9 @@ def main() -> int:
 
     try:
         reader = FloatSignalReader.from_stdin(raw=args.raw, sample_rate=args.rate)
-    except (StreamFormatError, EOFError) as exc:
+    except EOFError:
+        return 0
+    except StreamFormatError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

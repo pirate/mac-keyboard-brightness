@@ -11,21 +11,39 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Apply a realtime bandpass to an MSIG1 float32 mono stream."
     )
     p.add_argument(
+        "low_pos",
+        nargs="?",
+        type=float,
+        default=None,
+        help="Low cutoff in Hz (positional shorthand).",
+    )
+    p.add_argument(
+        "high_pos",
+        nargs="?",
+        type=float,
+        default=None,
+        help="High cutoff in Hz (positional shorthand).",
+    )
+    p.add_argument(
         "--low",
         type=float,
-        default=0.8,
+        default=None,
         help="Low cutoff in Hz (default: 0.8).",
     )
     p.add_argument(
         "--high",
         type=float,
-        default=3.0,
+        default=None,
         help="High cutoff in Hz (default: 3.0).",
     )
     p.add_argument(
@@ -65,7 +83,9 @@ def main() -> int:
 
     install_sigpipe_default()
 
-    if args.low <= 0 or args.high <= args.low:
+    low = args.low if args.low is not None else (args.low_pos if args.low_pos is not None else 0.8)
+    high = args.high if args.high is not None else (args.high_pos if args.high_pos is not None else 3.0)
+    if low <= 0 or high <= low:
         print("error: require 0 < --low < --high", file=sys.stderr)
         return 2
     if args.chunk_bytes < 4:
@@ -74,19 +94,21 @@ def main() -> int:
 
     try:
         reader = FloatSignalReader.from_stdin(raw=args.raw, sample_rate=args.rate)
-    except (StreamFormatError, EOFError) as exc:
+    except EOFError:
+        return 0
+    except StreamFormatError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
     nyquist = 0.5 * reader.sample_rate
-    if args.high >= nyquist:
+    if high >= nyquist:
         print(
             f"error: --high must be < Nyquist ({nyquist:.3f} Hz at {reader.sample_rate:.1f} Hz)",
             file=sys.stderr,
         )
         return 2
 
-    filt = CascadedBandpass(reader.sample_rate, args.low, args.high)
+    filt = CascadedBandpass(reader.sample_rate, low, high)
     writer = FloatSignalWriter.to_stdout(sample_rate=reader.sample_rate, raw=False)
 
     try:

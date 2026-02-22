@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import signal
 import sys
 import time
@@ -13,15 +14,70 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from toolkit.bootstrap import maybe_reexec_venv
+
+maybe_reexec_venv(__file__)
+
+
+class BeatFollower:
+    """Beat-friendly envelope follower with baseline subtraction and AGC."""
+
+    def __init__(
+        self,
+        sample_rate: float,
+        *,
+        attack_ms: float,
+        release_ms: float,
+        baseline_ms: float,
+        decay_per_s: float,
+        gain: float,
+    ) -> None:
+        self.fs = max(1.0, float(sample_rate))
+        self.attack_s = max(1e-4, float(attack_ms) / 1000.0)
+        self.release_s = max(1e-4, float(release_ms) / 1000.0)
+        self.baseline_s = max(1e-3, float(baseline_ms) / 1000.0)
+        self.decay_per_s = max(0.1, float(decay_per_s))
+        self.gain = max(0.0, float(gain))
+
+        self.fast_env = 0.0
+        self.slow_env = 0.0
+        self.agc_peak = 1e-6
+        self.out = 0.0
+
+    @staticmethod
+    def _lpf(prev: float, x: float, dt: float, tau: float) -> float:
+        a = math.exp(-max(0.0, dt) / max(1e-6, tau))
+        return a * prev + (1.0 - a) * x
+
+    def update(self, sample: float, dt: float) -> float:
+        x = abs(float(sample))
+        tau = self.attack_s if x > self.fast_env else self.release_s
+        self.fast_env = self._lpf(self.fast_env, x, dt, tau)
+        self.slow_env = self._lpf(self.slow_env, self.fast_env, dt, self.baseline_s)
+
+        onset = max(0.0, self.fast_env - self.slow_env)
+
+        if onset > self.agc_peak:
+            self.agc_peak += 0.08 * (onset - self.agc_peak)
+        else:
+            self.agc_peak += 0.002 * (onset - self.agc_peak)
+
+        norm = onset / max(1e-7, self.agc_peak)
+        norm = max(0.0, min(1.0, norm * self.gain))
+
+        decay = math.exp(-self.decay_per_s * max(0.0, dt))
+        self.out = max(norm, self.out * decay)
+        return self.out
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Read MSIG1 mono signal and map envelope to display brightness."
+        description="Read MSIG1 mono signal and map beat/envelope to display brightness."
     )
     parser.add_argument(
         "--send-hz",
         type=float,
-        default=30.0,
+        default=20.0,
         help="Maximum display brightness update rate in Hz.",
     )
     parser.add_argument(
@@ -39,13 +95,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gain",
         type=float,
-        default=1.0,
-        help="Linear gain applied to adaptive envelope before clamping.",
+        default=1.4,
+        help="Post-normalization gain (default: 1.4).",
+    )
+    parser.add_argument(
+        "--attack-ms",
+        type=float,
+        default=12.0,
+        help="Envelope attack time in ms (default: 12).",
+    )
+    parser.add_argument(
+        "--release-ms",
+        type=float,
+        default=260.0,
+        help="Envelope release time in ms (default: 260).",
+    )
+    parser.add_argument(
+        "--baseline-ms",
+        type=float,
+        default=900.0,
+        help="Moving baseline time in ms (default: 900).",
+    )
+    parser.add_argument(
+        "--decay-per-s",
+        type=float,
+        default=6.0,
+        help="Output decay constant per second (default: 6.0).",
     )
     parser.add_argument(
         "--no-restore",
         action="store_true",
         help="Do not restore the initial display brightness on exit.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print live stats to stderr (rate, sends, level/backend).",
     )
     return parser.parse_args()
 
@@ -58,11 +143,12 @@ def main() -> int:
     args = parse_args()
     if args.send_hz <= 0:
         raise SystemExit("--send-hz must be > 0")
+    if args.attack_ms <= 0 or args.release_ms <= 0 or args.baseline_ms <= 0:
+        raise SystemExit("--attack-ms, --release-ms, and --baseline-ms must be > 0")
 
     try:
-        from toolkit.dsp import AdaptiveLevel
         from toolkit.hardware import DisplayBrightnessController
-        from toolkit.signal_stream import FloatSignalReader, is_tty_stdin
+        from toolkit.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"screen-brightness dependencies unavailable: {exc}") from exc
 
@@ -79,15 +165,30 @@ def main() -> int:
         raise SystemExit("display brightness control is unavailable on this system")
 
     initial_level = controller.get()
-    reader = FloatSignalReader.from_stdin()
-    leveler = AdaptiveLevel()
+    try:
+        reader = FloatSignalReader.from_stdin()
+    except (EOFError, StreamFormatError):
+        return 0
+    follower = BeatFollower(
+        sample_rate=float(reader.sample_rate),
+        attack_ms=float(args.attack_ms),
+        release_ms=float(args.release_ms),
+        baseline_ms=float(args.baseline_ms),
+        decay_per_s=float(args.decay_per_s),
+        gain=float(args.gain),
+    )
 
     running = True
     send_dt = 1.0 / float(args.send_hz)
     dt = 1.0 / float(reader.sample_rate)
     clock = time.monotonic()
     next_send = clock
-    last_sent = None
+    last_sent = -1.0
+    min_delta = 0.02
+    sends = 0
+    sample_count = 0
+    last_debug = time.monotonic()
+    last_level = 0.0
 
     def _stop(_sig: int, _frame: object) -> None:
         nonlocal running
@@ -102,14 +203,35 @@ def main() -> int:
             if not running:
                 break
             for sample in chunk:
-                env = leveler.update(float(sample), dt)
-                env = clamp01(env * float(args.gain))
+                sample_count += 1
+                env = follower.update(float(sample), dt)
                 target = lo + env * (hi - lo)
+                last_level = target
                 clock += dt
-                if clock >= next_send and (last_sent is None or abs(target - last_sent) >= 0.01):
-                    if controller.set(target):
-                        last_sent = target
+                if clock >= next_send:
+                    if (
+                        abs(target - last_sent) >= min_delta
+                        or target <= lo + 0.02
+                        or last_sent <= lo + 0.02
+                    ):
+                        if controller.set(target):
+                            last_sent = target
+                            sends += 1
                     next_send = clock + send_dt
+            if args.debug:
+                now = time.monotonic()
+                span = now - last_debug
+                if span >= 1.0:
+                    in_hz = sample_count / max(1e-6, span)
+                    send_hz = sends / max(1e-6, span)
+                    print(
+                        f"[screen] backend={controller.backend} in_hz~{in_hz:.0f} send_hz~{send_hz:.1f} lvl={last_level:.3f}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    sample_count = 0
+                    sends = 0
+                    last_debug = now
     finally:
         if not args.no_restore and initial_level is not None:
             _ = controller.set(initial_level)

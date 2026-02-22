@@ -1,8 +1,8 @@
 # apple-silicon-accelerometer
 
-A modular, pipe-able macOS hardware signal toolkit built around 10 binaries in `./bin/`.
+A modular, pipe-able macOS hardware signal toolkit with runnable binaries in `./bin/`.
 
-The toolkit treats hardware signals as **mono float32 streams** over stdin/stdout so you can chain tools UNIX-style.
+Everything speaks one stream format so tools can be mixed freely in UNIX pipelines.
 
 ## quick start
 
@@ -12,88 +12,151 @@ cd apple-silicon-accelerometer
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements.txt
+export PATH="$PWD/bin:$PATH"
 ```
 
-Run commands directly from repo root, e.g.:
+## stream model
 
-```bash
-./bin/accelerometer | ./bin/visualizer
-```
-
-## stream format
-
-All streaming commands use this wire format:
+All stream tools read/write:
 
 - header: `MSIG1 <sample_rate_hz>\n`
-- payload: little-endian float32 mono samples
+- payload: little-endian `float32` mono samples
 
-Most commands can also read raw float32 with `--raw --rate <hz>`.
+Most processors also support raw float32 input via `--raw --rate <hz>`.
 
-## binaries (10)
+## command reference
 
-- `bin/accelerometer`: live Apple SPU accelerometer stream to stdout (up to 800 Hz, requires `sudo`)
-- `bin/microphone`: live microphone capture to stdout (up to device-supported rates, e.g. 44.1 kHz)
-- `bin/bandpass`: streaming bandpass (same cascaded HP+LP style as `motion_live.py`)
-- `bin/heartbeat`: BPM/confidence estimator from incoming filtered signal (JSON lines)
-- `bin/frequency-shift`: realtime best-effort frequency scaling by scalar factor
-- `bin/volume-shift`: amplitude gain scalar
-- `bin/keyboard-brightness`: maps signal envelope to keyboard backlight via KBPulse
-- `bin/speaker`: plays incoming signal on system audio output
-- `bin/screen-brightness`: maps signal envelope to display brightness
-- `bin/visualizer`: terminal live waveform/level monitor
+### source commands
 
-## example pipelines
+1. `accelerometer`
+- Purpose: read Apple SPU accelerometer and emit mono signal.
+- Args: `--rate <hz>` (<= 800), `--axis x|y|z|mag`, `--raw`.
+- Notes: requires `sudo`.
 
-Accelerometer heartbeat detection:
+2. `microphone`
+- Purpose: capture mono mic signal and emit stream.
+- Args: `--rate <hz>`, `--block-size <frames>`.
+
+3. `metronome [bpm]`
+- Purpose: emit metronome pulses; with piped stdin it auto-detects/follows BPM.
+- Args: optional `bpm`, `--rate` (fixed mode), `--pulse-ms`, `--tone-hz`, `--level`, `--accent-every`, `--accent-gain`, `--block-size`, `--min-bpm`, `--max-bpm`, `--detect-low-hz`, `--detect-high-hz`, `--self-echo-ms`, `--follow`, `--debug`, `--raw`.
+
+### processor / analysis commands
+
+4. `bandpass <low_hz> <high_hz>`
+- Purpose: realtime cascaded high/low-pass filter.
+- Args: positional cutoffs or `--low/--high`, `--chunk-bytes`, `--raw --rate`.
+
+5. `frequency-shift <factor>`
+- Purpose: best-effort realtime frequency scaling.
+- Args: `factor`, `--chunk-bytes`, `--raw --rate`.
+
+6. `volume-shift <gain>`
+- Purpose: scalar amplitude gain.
+- Args: `gain`, `--chunk-bytes`, `--raw --rate`.
+
+7. `heartbeat`
+- Purpose: emit BPM/confidence JSON lines from incoming signal (typically bandpassed).
+- Args: `--interval`, `--window-seconds`, `--emit-final`, `--chunk-bytes`, `--raw --rate`.
+
+### output / sink commands
+
+8. `speaker`
+- Purpose: play incoming stream on default output device.
+- Args: `--device-rate`, `--block-size`.
+
+9. `visualizer`
+- Purpose: terminal waveform + level monitor.
+- Args: `--fps`, `--window-seconds`, `--chunk-bytes`, `--raw --rate`.
+
+10. `keyboard-brightness`
+- Purpose: beat-follow keyboard backlight control.
+- Args: `--send-hz`, `--fade-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--as-root`.
+- Alias: `keyboad-brightness` (compat typo alias).
+
+11. `screen-brightness`
+- Purpose: beat-follow display brightness control.
+- Args: `--send-hz`, `--min-level`, `--max-level`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`.
+
+12. `fan-speed`
+- Purpose: signal-follow fan RPM control (both fans in sync by default; beat-alternating optional).
+- Args: `--send-hz`, `--min-rpm`, `--max-rpm`, `--min-frac`, `--max-frac`, `--pulse-depth`, `--couple`, `--alternate`, `--input-map`, `--beat-threshold`, `--beat-hold-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`.
+
+## mix-and-match recipes
+
+Heartbeat from accelerometer:
 
 ```bash
-sudo ./bin/accelerometer | ./bin/bandpass --low 0.8 --high 3.0 | ./bin/heartbeat
+sudo accelerometer | bandpass 0.8 3 | heartbeat
 ```
 
-Microphone to keyboard flash:
+Music-reactive keyboard + speakers:
 
 ```bash
-./bin/microphone --rate 44100 | ./bin/keyboard-brightness
+microphone --rate 44100 \
+  | tee >(keyboard-brightness --send-hz 30 --fade-ms 20) \
+  | volume-shift 0.8 \
+  | speaker
 ```
 
-Modular synth-style chain:
+Metronome to speakers:
 
 ```bash
-sudo ./bin/accelerometer \
-  | ./bin/bandpass --low 0.8 --high 3 \
-  | tee >(./bin/keyboard-brightness) \
-  | ./bin/frequency-shift 1000 \
-  | ./bin/volume-shift 0.8 \
-  | ./bin/speaker
+metronome 120 | speaker
 ```
 
-Live monitor:
+Auto-follow metronome from mic input:
 
 ```bash
-./bin/microphone --rate 44100 | ./bin/visualizer
+microphone --rate 44100 | metronome | speaker
 ```
 
-## kbpulse integration
-
-`keyboard-brightness` uses vendored KBPulse (`KBPulse/bin/KBPulse`, included in this repo).
-
-Rebuild that binary (optional):
+Metronome driving keyboard pulses:
 
 ```bash
-./scripts/rebuild_kbpulse_binary.sh
+metronome 120 | keyboard-brightness --send-hz 24 --fade-ms 20
 ```
 
-## permissions and notes
+Metronome driving fan pulses:
 
-- `accelerometer` requires root due AppleSPU HID access.
-- `keyboard-brightness` and `screen-brightness` require appropriate macOS permissions and supported hardware.
-- `microphone` and `speaker` require an installed `sounddevice` runtime backend (PortAudio).
-- `frequency-shift` is realtime best-effort and intentionally lightweight (artifact-prone at extreme factors).
+```bash
+metronome 120 | sudo fan-speed --send-hz 4 --alternate --input-map beat --min-frac 0.30 --max-frac 0.70
+```
 
-## legacy tool
+Slow sine fan sweep (sync L/R):
 
-`motion_live.py` is still present as a standalone detector/monitor, but the primary interface is now `./bin/*`.
+```bash
+sine 0.1 | sudo fan-speed
+```
+
+One source, multiple sinks:
+
+```bash
+sudo accelerometer \
+  | bandpass 0.8 3 \
+  | tee >(keyboard-brightness) >(visualizer) \
+  | frequency-shift 1000 \
+  | volume-shift 0.8 \
+  | speaker
+```
+
+## practical notes
+
+- `accelerometer` requires root (AppleSPU HID access).
+- `microphone`/`speaker` depend on `sounddevice` + PortAudio runtime.
+- Keyboard/display brightness tools need supported hardware/permissions.
+- `fan-speed` uses AppleSMC private IOKit APIs on Apple Silicon; writing fan targets typically requires `sudo`.
+- `frequency-shift` is intentionally lightweight and artifact-prone at extreme factors.
+
+## legacy script
+
+`motion_live.py` remains available, but primary usage is `./bin/*`.
 
 ## license
 
 MIT
+
+## links
+
+- apple silicon accelerometer: https://github.com/olvvier/apple-silicon-accelerometer
+- KBPulse: https://github.com/EthanRDoesMC/KBPulse/
