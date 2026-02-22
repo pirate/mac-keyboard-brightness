@@ -13,6 +13,14 @@ cd apple-silicon-accelerometer
 uv venv
 uv pip install -r requirements.txt
 export PATH="$PWD:$PATH"
+
+sudo accelerometer \
+  | bandpass 0.8 3 \
+  | tee >(keyboard-brightness) >(visualizer) \
+  | metronome \
+  | frequency-shift 1000 \
+  | volume-shift 0.8 \
+  | speaker
 ```
 
 ![Flashing keyboard gif](https://i.imgur.com/AS6tTre.gif)
