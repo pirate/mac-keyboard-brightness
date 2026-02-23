@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -24,6 +26,56 @@ for _p in (LIB_ROOT, PROJECT_ROOT):
 from bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
+
+
+HOLDER_PIDFILE = Path("/tmp/apple-hardware-keyboard-brightness-set.pid")
+
+
+def _read_holder_pid() -> int | None:
+    try:
+        txt = HOLDER_PIDFILE.read_text(encoding="utf-8").strip()
+        if not txt:
+            return None
+        return int(txt)
+    except Exception:
+        return None
+
+
+def _holder_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _stop_holder() -> None:
+    pid = _read_holder_pid()
+    if pid is None:
+        try:
+            HOLDER_PIDFILE.unlink()
+        except Exception:
+            pass
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    for _ in range(20):
+        if not _holder_running(pid):
+            break
+        time.sleep(0.05)
+    if _holder_running(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        HOLDER_PIDFILE.unlink()
+    except Exception:
+        pass
 
 
 class BeatFollower:
@@ -185,6 +237,37 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run KBPulse as root when this process is root (default: drop to sudo user).",
     )
+    parser.add_argument(
+        "--pulse",
+        type=int,
+        default=None,
+        help="Ignore stdin and pulse keyboard lights N times.",
+    )
+    parser.add_argument(
+        "--on-time",
+        type=float,
+        default=1.2,
+        help="Seconds to stay on per pulse (default: 1.2).",
+    )
+    parser.add_argument(
+        "--off-time",
+        type=float,
+        default=5.5,
+        help="Seconds to stay off per pulse (default: 5.5).",
+    )
+    parser.add_argument(
+        "--set",
+        dest="set_percent",
+        type=float,
+        default=None,
+        help="Set keyboard brightness percent (0..100). With --pulse this is pulse max.",
+    )
+    parser.add_argument(
+        "--_hold-level",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
 
 
@@ -194,6 +277,12 @@ def main() -> int:
         raise SystemExit("--send-hz must be > 0")
     if args.attack_ms <= 0 or args.release_ms <= 0 or args.baseline_ms <= 0:
         raise SystemExit("--attack-ms, --release-ms, and --baseline-ms must be > 0")
+    if args.pulse is not None and args.pulse < 0:
+        raise SystemExit("--pulse must be >= 0")
+    if args.on_time < 0 or args.off_time < 0:
+        raise SystemExit("--on-time and --off-time must be >= 0")
+    if args.set_percent is not None and (args.set_percent < 0 or args.set_percent > 100):
+        raise SystemExit("--set must be between 0 and 100")
 
     try:
         from hardware import launch_kbpulse_stdin, send_kbpulse_level, stop_kbpulse
@@ -201,6 +290,125 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"keyboard-brightness dependencies unavailable: {exc}") from exc
 
+    if args._hold_level is not None:
+        level = max(0.0, min(1.0, float(args._hold_level)))
+        proc, err = launch_kbpulse_stdin(
+            fade_ms=max(0, int(args.fade_ms)),
+            run_as_user=not args.as_root,
+            start_dir=str(PROJECT_ROOT),
+        )
+        if proc is None:
+            raise SystemExit(f"failed to start KBPulse: {err}")
+        running = True
+
+        def _stop(_sig: int, _frame: object) -> None:
+            nonlocal running
+            running = False
+
+        signal.signal(signal.SIGINT, _stop)
+        signal.signal(signal.SIGTERM, _stop)
+        try:
+            while running:
+                if proc.poll() is not None:
+                    raise SystemExit("KBPulse holder exited unexpectedly")
+                if not send_kbpulse_level(proc, level):
+                    raise SystemExit("failed writing to KBPulse stdin")
+                time.sleep(0.7)
+            return 0
+        finally:
+            stop_kbpulse(proc, fade_ms=max(0, int(args.fade_ms)), reset=False)
+
+    control_mode = (args.pulse is not None) or (args.set_percent is not None)
+    if control_mode:
+        running = True
+
+        def _stop(_sig: int, _frame: object) -> None:
+            nonlocal running
+            running = False
+
+        signal.signal(signal.SIGINT, _stop)
+        signal.signal(signal.SIGTERM, _stop)
+
+        target_pct = args.set_percent if args.set_percent is not None else 100.0
+        target_level = max(0.0, min(1.0, float(target_pct) / 100.0))
+
+        if args.pulse is None:
+            # Persistent set mode: run a detached holder process so brightness
+            # remains at target after this command exits.
+            _stop_holder()
+            if target_level <= 0.0:
+                proc, err = launch_kbpulse_stdin(
+                    fade_ms=max(0, int(args.fade_ms)),
+                    run_as_user=not args.as_root,
+                    start_dir=str(PROJECT_ROOT),
+                )
+                if proc is not None:
+                    try:
+                        send_kbpulse_level(proc, 0.0)
+                        time.sleep(max(0.08, float(args.fade_ms) / 1000.0 + 0.05))
+                    finally:
+                        stop_kbpulse(proc, fade_ms=max(0, int(args.fade_ms)), reset=False)
+                return 0
+
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--_hold-level",
+                f"{target_level:.4f}",
+                "--fade-ms",
+                str(max(0, int(args.fade_ms))),
+            ]
+            if args.as_root:
+                cmd.append("--as-root")
+            try:
+                child = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+                HOLDER_PIDFILE.write_text(str(child.pid), encoding="utf-8")
+            except Exception as exc:
+                raise SystemExit(f"failed to start keyboard brightness holder: {exc}") from exc
+            return 0
+
+        # Pulse mode is transient; stop any persistent holder first.
+        _stop_holder()
+        proc, err = launch_kbpulse_stdin(
+            fade_ms=max(0, int(args.fade_ms)),
+            run_as_user=not args.as_root,
+            start_dir=str(PROJECT_ROOT),
+        )
+        if proc is None:
+            raise SystemExit(f"failed to start KBPulse: {err}")
+
+        def _sleep_while_running(seconds: float) -> None:
+            end_t = time.monotonic() + max(0.0, float(seconds))
+            while running:
+                now = time.monotonic()
+                if now >= end_t:
+                    break
+                time.sleep(min(0.05, end_t - now))
+
+        try:
+            count = int(args.pulse)
+            for i in range(count):
+                if not running:
+                    break
+                if not send_kbpulse_level(proc, target_level):
+                    raise SystemExit("failed writing to KBPulse stdin")
+                _sleep_while_running(float(args.on_time))
+                if not send_kbpulse_level(proc, 0.0):
+                    raise SystemExit("failed writing to KBPulse stdin")
+                if i < (count - 1):
+                    _sleep_while_running(float(args.off_time))
+            return 0
+        finally:
+            stop_kbpulse(proc, fade_ms=max(0, int(args.fade_ms)), reset=False)
+
+    _stop_holder()
     if is_tty_stdin():
         raise SystemExit("keyboard-brightness expects an MSIG1 stream on stdin")
 

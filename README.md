@@ -83,13 +83,18 @@ sudo accelerometer \
 ### `keyboard-brightness`
 
 - Purpose: beat-follow keyboard backlight control.
-- Args: `--send-hz`, `--fade-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--as-root`.
-- Alias: `keyboad-brightness` (compat typo alias).
+- Args: `--send-hz`, `--fade-ms`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--as-root`, `--pulse`, `--on-time`, `--off-time`, `--set`.
+- Notes:
+  - `--set=<0..100>` without `--pulse` sets brightness and exits immediately (ignores stdin).
+  - `--pulse=<N>` ignores stdin and pulses N times; `--set` controls pulse max brightness.
 
 ###  `screen-brightness`
 
 - Purpose: beat-follow display brightness control.
-- Args: `--send-hz`, `--min-level`, `--max-level`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`.
+- Args: `--send-hz`, `--min-level`, `--max-level`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`, `--pulse`, `--on-time`, `--off-time`, `--set`.
+- Notes:
+  - `--set=<0..100>` without `--pulse` sets display brightness and exits immediately (ignores stdin).
+  - `--pulse=<N>` ignores stdin and pulses N times; `--set` controls pulse max brightness.
 
 ### `fan-speed`
 
@@ -131,6 +136,30 @@ Metronome driving keyboard pulses:
 
 ```bash
 metronome 120 | keyboard-brightness
+```
+
+Set keyboard backlight to 100% and exit:
+
+```bash
+keyboard-brightness --set=100
+```
+
+Pulse keyboard 5 times (1.2s on / 5.5s off) at 100%:
+
+```bash
+keyboard-brightness --pulse=5 --on-time=1.2 --off-time=5.5 --set=100
+```
+
+Set screen brightness to 40% and exit:
+
+```bash
+screen-brightness --set=40
+```
+
+Pulse screen brightness 3 times:
+
+```bash
+screen-brightness --pulse=3 --on-time=1.2 --off-time=5.5 --set=100
 ```
 
 Metronome driving fan pulses:

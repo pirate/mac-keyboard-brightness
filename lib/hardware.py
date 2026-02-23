@@ -74,13 +74,23 @@ def send_kbpulse_level(proc: subprocess.Popen[str], level: float) -> bool:
         return False
 
 
-def stop_kbpulse(proc: subprocess.Popen[str], fade_ms: int = 20) -> None:
+def stop_kbpulse(proc: subprocess.Popen[str], fade_ms: int = 20, *, reset: bool = True) -> None:
     try:
-        send_kbpulse_level(proc, 0.0)
+        if reset:
+            send_kbpulse_level(proc, 0.0)
         if proc.stdin:
             proc.stdin.close()
     except Exception:
         pass
+    # For non-reset control mode, allow KBPulse to exit naturally on EOF.
+    # Force-terminating here can cancel the final applied level.
+    if not reset:
+        try:
+            proc.wait(timeout=max(0.2, fade_ms / 1000.0 + 0.5))
+        except Exception:
+            pass
+        return
+
     if proc.poll() is None:
         proc.terminate()
         try:

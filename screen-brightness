@@ -134,6 +134,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print live stats to stderr (rate, sends, level/backend).",
     )
+    parser.add_argument(
+        "--pulse",
+        type=int,
+        default=None,
+        help="Ignore stdin and pulse screen brightness N times.",
+    )
+    parser.add_argument(
+        "--on-time",
+        type=float,
+        default=1.2,
+        help="Seconds to stay on per pulse (default: 1.2).",
+    )
+    parser.add_argument(
+        "--off-time",
+        type=float,
+        default=5.5,
+        help="Seconds to stay off per pulse (default: 5.5).",
+    )
+    parser.add_argument(
+        "--set",
+        dest="set_percent",
+        type=float,
+        default=None,
+        help="Set brightness percent (0..100). With --pulse this is pulse max.",
+    )
     return parser.parse_args()
 
 
@@ -147,15 +172,18 @@ def main() -> int:
         raise SystemExit("--send-hz must be > 0")
     if args.attack_ms <= 0 or args.release_ms <= 0 or args.baseline_ms <= 0:
         raise SystemExit("--attack-ms, --release-ms, and --baseline-ms must be > 0")
+    if args.pulse is not None and args.pulse < 0:
+        raise SystemExit("--pulse must be >= 0")
+    if args.on_time < 0 or args.off_time < 0:
+        raise SystemExit("--on-time and --off-time must be >= 0")
+    if args.set_percent is not None and (args.set_percent < 0 or args.set_percent > 100):
+        raise SystemExit("--set must be between 0 and 100")
 
     try:
         from hardware import DisplayBrightnessController
         from signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"screen-brightness dependencies unavailable: {exc}") from exc
-
-    if is_tty_stdin():
-        raise SystemExit("screen-brightness expects an MSIG1 stream on stdin")
 
     lo = clamp01(args.min_level)
     hi = clamp01(args.max_level)
@@ -165,6 +193,52 @@ def main() -> int:
     controller = DisplayBrightnessController()
     if not controller.available:
         raise SystemExit("display brightness control is unavailable on this system")
+
+    control_mode = (args.pulse is not None) or (args.set_percent is not None)
+    if control_mode:
+        running = True
+
+        def _stop(_sig: int, _frame: object) -> None:
+            nonlocal running
+            running = False
+
+        signal.signal(signal.SIGINT, _stop)
+        signal.signal(signal.SIGTERM, _stop)
+
+        target_pct = args.set_percent if args.set_percent is not None else 100.0
+        target_level = clamp01(float(target_pct) / 100.0)
+
+        def _sleep_while_running(seconds: float) -> None:
+            end_t = time.monotonic() + max(0.0, float(seconds))
+            while running:
+                now = time.monotonic()
+                if now >= end_t:
+                    break
+                time.sleep(min(0.05, end_t - now))
+
+        if args.pulse is None:
+            if not controller.set(target_level):
+                return 1
+            return 0
+
+        initial_level = controller.get()
+        count = int(args.pulse)
+        try:
+            for i in range(count):
+                if not running:
+                    break
+                _ = controller.set(target_level)
+                _sleep_while_running(float(args.on_time))
+                _ = controller.set(0.0)
+                if i < (count - 1):
+                    _sleep_while_running(float(args.off_time))
+            return 0
+        finally:
+            if not args.no_restore and initial_level is not None:
+                _ = controller.set(initial_level)
+
+    if is_tty_stdin():
+        raise SystemExit("screen-brightness expects an MSIG1 stream on stdin")
 
     initial_level = controller.get()
     try:
