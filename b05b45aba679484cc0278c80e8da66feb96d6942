@@ -1,0 +1,40 @@
+keyboard-brightness
+  e4d2e6b1a3650f7a 8,10,31-80,240-270,280-285,293-409,411
+lib/hardware.py
+  e4d2e6b1a3650f7a 77,79,85-93
+README.md
+  e4d2e6b1a3650f7a 87-90,95-98,142-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "b05b45aba679484cc0278c80e8da66feb96d6942",
+  "prompts": {
+    "2f7704868cdfaa00": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019c894a-d68f-7250-ade6-9ea39ed20bf1",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 0,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    },
+    "e4d2e6b1a3650f7a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019c7a1f-96bc-78d0-af1e-89263ca0d2fe",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>",
+      "messages": [],
+      "total_additions": 518,
+      "total_deletions": 18,
+      "accepted_lines": 504,
+      "overriden_lines": 0
+    }
+  }
+}
