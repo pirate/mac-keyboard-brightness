@@ -7,10 +7,9 @@ All tools input and output a standardized mono audio signal that represents thei
 ## Quickstart
 
 ```bash
-git clone https://github.com/olvvier/apple-silicon-accelerometer
-cd apple-silicon-accelerometer
+git clone https://github.com/pirate/mac-hardware-toys
+cd mac-hardware-toys
 
-uv venv
 uv sync
 source .venv/bin/activate
 
