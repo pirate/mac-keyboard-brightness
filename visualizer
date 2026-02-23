@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import re
 import shutil
 import sys
@@ -560,13 +561,24 @@ class LiveStats:
             best_freq = float(self.beat_fs / best_lag)
             cand = [(best_freq, best_r)]
 
+        # Keep only finite candidates to avoid NaN propagating into selection.
+        cand = [c for c in cand if math.isfinite(c[0]) and math.isfinite(c[1])]
+        if not cand:
+            self.hr_freq_raw = None
+            self.hr_bpm = None
+            self.hr_freq_hz = None
+            self.hr_confidence = 0.0
+            return
+
         cand.sort(key=lambda t: t[1], reverse=True)
         cand = cand[:8]
 
         prev = self.hr_freq_track
         # Prefer the lowest-frequency strong peak (fundamental) over nearby harmonics.
-        max_r = cand[0][1]
+        max_r = max(c[1] for c in cand)
         strong = [c for c in cand if c[1] >= max_r * 0.82]
+        if not strong:
+            strong = [max(cand, key=lambda t: t[1])]
         chosen_freq, chosen_r = min(strong, key=lambda t: t[0])
 
         if prev is not None and prev > 0:
@@ -877,6 +889,14 @@ def main() -> int:
     if args.chunk_bytes is not None and args.chunk_bytes < 4:
         print("error: --chunk-bytes must be >= 4", file=sys.stderr)
         return 2
+
+    # Avoid looking "frozen" when upstream never emits an MSIG1 header.
+    if not os.isatty(sys.stdin.fileno()):
+        print(
+            "visualizer: waiting for upstream stream header (MSIG1)...",
+            file=sys.stderr,
+            flush=True,
+        )
 
     try:
         reader = FloatSignalReader.from_stdin(raw=args.raw, sample_rate=args.rate)

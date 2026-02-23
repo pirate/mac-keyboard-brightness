@@ -9,6 +9,7 @@ import multiprocessing
 from multiprocessing import shared_memory
 import os
 import signal
+import stat
 import struct
 import sys
 import time
@@ -25,6 +26,27 @@ from bootstrap import maybe_reexec_venv
 maybe_reexec_venv(__file__)
 
 NATIVE_RATE_HZ = 800.0
+DEBUG_ACCEL = os.environ.get("MSIG_DEBUG_ACCEL") == "1"
+PAYLOAD_FLUSH_BYTES = 4096
+PAYLOAD_FLUSH_SECONDS = 0.05
+
+
+def _debug(msg: str) -> None:
+    if DEBUG_ACCEL:
+        print(f"[accelerometer] {msg}", file=sys.stderr, flush=True)
+
+
+def _fd_kind(fd: int) -> str:
+    mode = os.fstat(fd).st_mode
+    if stat.S_ISFIFO(mode):
+        return "fifo"
+    if stat.S_ISCHR(mode):
+        return "char"
+    if stat.S_ISREG(mode):
+        return "file"
+    if stat.S_ISSOCK(mode):
+        return "sock"
+    return "other"
 
 
 class LinearResampler:
@@ -101,27 +123,47 @@ def extract_axis(samples: list[tuple[float, float, float]], axis: str) -> list[f
 
 
 def write_header(sample_rate: float) -> None:
-    sys.stdout.buffer.write(f"MSIG1 {int(round(sample_rate))}\n".encode("ascii"))
-    sys.stdout.buffer.flush()
+    payload = f"MSIG1 {int(round(sample_rate))}\n".encode("ascii")
+    _write_all(payload)
 
 
-def write_f32(samples: list[float]) -> None:
-    if not samples:
-        return
-    sys.stdout.buffer.write(struct.pack("<%sf" % len(samples), *samples))
+def _write_all(payload: bytes) -> None:
+    fd = 1
+    view = memoryview(payload)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise RuntimeError("stdout write returned <= 0")
+        view = view[n:]
 
 
 def main() -> int:
+    _debug("start")
+    _debug(f"stdout fd1: isatty={os.isatty(1)} kind={_fd_kind(1)}")
+    try:
+        sofd = sys.stdout.fileno()
+        _debug(f"sys.stdout.fileno={sofd} kind={_fd_kind(sofd)}")
+    except Exception as exc:
+        _debug(f"sys.stdout.fileno unavailable: {exc}")
     args = parse_args()
+    _debug("parsed args")
     if args.rate <= 0 or args.rate > NATIVE_RATE_HZ:
         raise SystemExit("--rate must satisfy: 0 < rate <= 800")
+
+    require_root()
+    _debug("root ok")
+
+    # Emit stream metadata before lower-level sensor setup so downstream
+    # pipeline tools can validate format immediately.
+    if not args.raw:
+        write_header(float(args.rate))
+        _debug("header written")
 
     try:
         from spu_sensor import SHM_SIZE, sensor_worker, shm_read_new
     except Exception as exc:
         raise SystemExit(f"accelerometer dependencies unavailable: {exc}") from exc
-
-    require_root()
+    _debug("spu_sensor imported")
 
     decimate = max(1, int(math.floor(NATIVE_RATE_HZ / float(args.rate))))
     worker_rate = NATIVE_RATE_HZ / float(decimate)
@@ -132,14 +174,14 @@ def main() -> int:
     )
 
     shm = shared_memory.SharedMemory(create=True, size=SHM_SIZE)
+    _debug("shared memory allocated")
     for i in range(SHM_SIZE):
         shm.buf[i] = 0
     worker: multiprocessing.Process | None = None
     last_total = 0
     running = True
-
-    if not args.raw:
-        write_header(float(args.rate))
+    payload_buf = bytearray()
+    last_flush = time.monotonic()
 
     def _stop(_sig: int, _frame: object) -> None:
         nonlocal running
@@ -155,6 +197,7 @@ def main() -> int:
             daemon=True,
         )
         worker.start()
+        _debug("sensor worker started")
 
         while running:
             if worker.exitcode is not None:
@@ -168,8 +211,15 @@ def main() -> int:
             mono = extract_axis(samples, args.axis)
             out = resampler.process(mono) if resampler is not None else mono
             if out:
-                write_f32(out)
-                sys.stdout.buffer.flush()
+                payload_buf.extend(struct.pack("<%sf" % len(out), *out))
+                now = time.monotonic()
+                if (
+                    len(payload_buf) >= PAYLOAD_FLUSH_BYTES
+                    or (now - last_flush) >= PAYLOAD_FLUSH_SECONDS
+                ):
+                    _write_all(payload_buf)
+                    payload_buf.clear()
+                    last_flush = now
 
     except BrokenPipeError:
         pass
@@ -177,6 +227,11 @@ def main() -> int:
         print(f"accelerometer: {exc}", file=sys.stderr)
         return 1
     finally:
+        if payload_buf:
+            try:
+                _write_all(payload_buf)
+            except BrokenPipeError:
+                pass
         if worker is not None and worker.is_alive():
             worker.terminate()
             worker.join(timeout=1.0)

@@ -14,43 +14,16 @@ from pathlib import Path
 
 
 def resolve_kbpulse_binary(start_dir: str | None = None) -> str | None:
-    """Resolve KBPulse binary path from common local locations."""
-    roots: list[Path] = [Path(__file__).resolve().parent]
+    """Resolve KBPulse binary from a fixed repo-relative location."""
     if start_dir:
-        roots.append(Path(start_dir).resolve())
-    roots.append(Path(os.getcwd()).resolve())
-
-    # Expand roots with parent dirs so scripts installed under .venv/bin can
-    # still discover repo-local assets when run from the project root.
-    expanded: list[Path] = []
-    for root in roots:
-        expanded.append(root)
-        expanded.append(root.parent)
-        expanded.append(root.parent.parent)
-
-    # De-duplicate while preserving priority order.
-    uniq_bases: list[Path] = []
-    for b in expanded:
-        if b not in uniq_bases:
-            uniq_bases.append(b)
-
-    candidates: list[str | None] = [os.environ.get("KBPULSE_BIN")]
-    for base in uniq_bases:
-        candidates.extend(
-            [
-                str(base / "lib" / "KBPulse"),
-                str(base / "KBPulse" / "bin" / "KBPulse"),
-                str(base / ".localbin" / "KBPulse"),
-                str(base / "KBPulse" / "build" / "Release" / "KBPulse"),
-                str(base / "KBPulse" / "build" / "Debug" / "KBPulse"),
-            ]
-        )
-    candidates.extend([shutil.which("KBPulse"), shutil.which("kbpulse")])
-    for cand in candidates:
-        if not cand:
-            continue
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
+        base = Path(start_dir).resolve()
+        if base.name == "bin" and base.parent.name == ".venv":
+            base = base.parent.parent
+    else:
+        base = Path(__file__).resolve().parent.parent
+    cand = base / "lib" / "KBPulse"
+    if os.path.isfile(cand) and os.access(cand, os.X_OK):
+        return str(cand)
     return None
 
 

@@ -10,9 +10,14 @@ import sys
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent
-LIB_ROOT = REPO_ROOT / "lib"
-for _p in (LIB_ROOT, REPO_ROOT):
+COMMAND_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = (
+    COMMAND_DIR.parent.parent
+    if COMMAND_DIR.name == "bin" and COMMAND_DIR.parent.name == ".venv"
+    else COMMAND_DIR
+)
+LIB_ROOT = PROJECT_ROOT / "lib"
+for _p in (LIB_ROOT, PROJECT_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -214,7 +219,7 @@ def main() -> int:
     proc, err = launch_kbpulse_stdin(
         fade_ms=max(0, int(args.fade_ms)),
         run_as_user=not args.as_root,
-        start_dir=str(REPO_ROOT),
+        start_dir=str(PROJECT_ROOT),
     )
     if proc is None:
         raise SystemExit(f"failed to start KBPulse: {err}")
