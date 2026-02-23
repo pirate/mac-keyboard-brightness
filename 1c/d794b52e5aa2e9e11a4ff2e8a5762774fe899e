@@ -1,0 +1,27 @@
+lib/hardware.py
+  e4d2e6b1a3650f7a 77,79,85-93
+README.md
+  e4d2e6b1a3650f7a 86-89,94-97,141-162
+keyboard-brightness
+  e4d2e6b1a3650f7a 8,10,31-80,240-270,280-285,293-409,411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "1cd794b52e5aa2e9e11a4ff2e8a5762774fe899e",
+  "prompts": {
+    "e4d2e6b1a3650f7a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019c7a1f-96bc-78d0-af1e-89263ca0d2fe",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 248,
+      "overriden_lines": 0
+    }
+  }
+}
