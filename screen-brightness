@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 LIB_ROOT = REPO_ROOT / "lib"
-for _p in (LIB_ROOT, REPO_ROOT):
+for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

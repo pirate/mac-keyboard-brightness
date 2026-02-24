@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 LIB_ROOT = REPO_ROOT / "lib"
-for _p in (LIB_ROOT, REPO_ROOT):
+for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -69,6 +69,50 @@ class BeatFollower:
 
         decay = math.exp(-self.decay_per_s * max(0.0, dt))
         self.out = max(norm, self.out * decay)
+        return self.out
+
+
+class LevelFollower:
+    """Smoothed absolute-level follower for direct amplitude mapping."""
+
+    def __init__(self, *, attack_ms: float, release_ms: float, gain: float) -> None:
+        self.attack_s = max(1e-4, float(attack_ms) / 1000.0)
+        self.release_s = max(1e-4, float(release_ms) / 1000.0)
+        self.gain = max(0.0, float(gain))
+        self.env = 0.0
+        self.noise = 0.0
+        self.excess_peak = 0.02
+        self.out = 0.0
+        # Let noise floor rise very slowly so sustained loud sections keep driving.
+        self.noise_rise_s = 24.0
+        self.noise_fall_s = 1.2
+        self.excess_peak_decay_s = 2.6
+        self.min_excess = 0.0012
+
+    @staticmethod
+    def _lpf(prev: float, x: float, dt: float, tau: float) -> float:
+        a = math.exp(-max(0.0, dt) / max(1e-6, tau))
+        return a * prev + (1.0 - a) * x
+
+    def update(self, sample: float, dt: float) -> float:
+        x = abs(float(sample))
+        tau = self.attack_s if x > self.env else self.release_s
+        self.env = self._lpf(self.env, x, dt, tau)
+        noise_tau = self.noise_rise_s if self.env > self.noise else self.noise_fall_s
+        self.noise = self._lpf(self.noise, self.env, dt, noise_tau)
+
+        # Persistent loudness above ambient floor (not just rising transients).
+        gate = max(0.00025, self.noise * 1.02)
+        excess = max(0.0, self.env - gate)
+        peak_decay = math.exp(-max(0.0, dt) / max(1e-6, self.excess_peak_decay_s))
+        self.excess_peak = max(excess, self.excess_peak * peak_decay)
+        ref = max(self.min_excess, self.excess_peak)
+        norm = clamp01(excess / ref)
+        target = clamp01((norm ** 0.65) * self.gain * 1.6)
+        out_tau = 0.05 if target > self.out else 0.30
+        self.out = self._lpf(self.out, target, dt, out_tau)
+        if self.out < 0.0015:
+            return 0.0
         return self.out
 
 
@@ -143,8 +187,8 @@ def parse_args() -> argparse.Namespace:
         choices=("auto", "direct", "beat"),
         default="auto",
         help=(
-            "How input samples map to fan target: auto=direct when coupled, beat when alternating "
-            "(default: auto)."
+            "How input samples map to fan target: auto=direct when coupled, beat when alternating. "
+            "direct uses smoothed absolute level; beat uses onset-following envelope (default: auto)."
         ),
     )
     parser.add_argument(
@@ -273,6 +317,11 @@ def main() -> int:
         decay_per_s=float(args.decay_per_s),
         gain=float(args.gain),
     )
+    level_follower = LevelFollower(
+        attack_ms=float(args.attack_ms),
+        release_ms=float(args.release_ms),
+        gain=float(args.gain),
+    )
 
     running = True
     send_dt = 1.0 / float(args.send_hz)
@@ -289,6 +338,11 @@ def main() -> int:
     sample_count = 0
     last_debug = time.monotonic()
     last_env = 0.0
+    last_raw_env = 0.0
+    last_noise = 0.0
+    last_peak = 0.0
+    direct_hold_env = 0.0
+    direct_hold_tau = 1.2
     last_target_l = floor_rpm
     last_target_r = floor_rpm
 
@@ -320,7 +374,13 @@ def main() -> int:
                 signal_clock += dt
 
                 if map_mode == "direct":
-                    env = clamp01((raw + 1.0) * 0.5)
+                    env = level_follower.update(raw, dt)
+                    hold_decay = math.exp(-max(0.0, dt) / max(1e-6, direct_hold_tau))
+                    direct_hold_env = max(env, direct_hold_env * hold_decay)
+                    env = direct_hold_env
+                    last_raw_env = level_follower.env
+                    last_noise = level_follower.noise
+                    last_peak = level_follower.excess_peak
                 else:
                     env = follower.update(raw, dt)
                 last_env = env
@@ -369,6 +429,7 @@ def main() -> int:
                         (
                             f"[fan] backend={controller.backend} in_hz~{in_hz:.0f} "
                             f"send_hz~{send_hz:.1f} mode={map_mode} env={last_env:.3f} "
+                            f"raw={last_raw_env:.3f} noise={last_noise:.3f} peak={last_peak:.3f} "
                             f"L={last_target_l:.0f} R={last_target_r:.0f} side={side}"
                         ),
                         file=sys.stderr,

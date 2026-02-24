@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 LIB_ROOT = ROOT / "lib"
-for _p in (LIB_ROOT, ROOT):
+for _p in reversed((LIB_ROOT, ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -23,7 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Consume an MSIG1 float32 mono stream and emit periodic BPM estimates "
-            "as JSON lines."
+            "as JSON lines. When stdout is piped, the input stream is passed through "
+            "on stdout and JSON is emitted to stderr."
         )
     )
     p.add_argument(
@@ -70,6 +72,7 @@ def emit_line(
     confidence: float,
     sample_rate: float,
     samples_seen: int,
+    out_stream: object,
 ) -> None:
     payload = {
         "t_sec": round(stream_seconds, 3),
@@ -78,7 +81,7 @@ def emit_line(
         "bpm": None if bpm is None else round(float(bpm), 2),
         "confidence": round(float(confidence), 3),
     }
-    print(json.dumps(payload, separators=(",", ":")), flush=True)
+    print(json.dumps(payload, separators=(",", ":")), file=out_stream, flush=True)
 
 
 def main() -> int:
@@ -88,6 +91,7 @@ def main() -> int:
         from dsp import HeartbeatEstimator
         from signal_stream import (
             FloatSignalReader,
+            FloatSignalWriter,
             StreamFormatError,
             install_sigpipe_default,
         )
@@ -118,6 +122,9 @@ def main() -> int:
     estimator = HeartbeatEstimator(
         sample_rate=reader.sample_rate, window_seconds=args.window_seconds
     )
+    stdout_piped = not os.isatty(sys.stdout.fileno())
+    json_stream = sys.stderr if stdout_piped else sys.stdout
+    writer = FloatSignalWriter.to_stdout(sample_rate=reader.sample_rate, raw=args.raw) if stdout_piped else None
     emit_every = max(1, int(round(args.interval * reader.sample_rate)))
     next_emit = emit_every
     samples_seen = 0
@@ -126,6 +133,9 @@ def main() -> int:
     for chunk in reader.iter_chunks(chunk_bytes=args.chunk_bytes):
         estimator.add(chunk)
         samples_seen += int(chunk.size)
+        if writer is not None:
+            writer.write(chunk)
+            writer.flush()
 
         while samples_seen >= next_emit:
             bpm, conf = estimator.estimate()
@@ -135,6 +145,7 @@ def main() -> int:
                 confidence=conf,
                 sample_rate=reader.sample_rate,
                 samples_seen=next_emit,
+                out_stream=json_stream,
             )
             emitted += 1
             next_emit += emit_every
@@ -149,6 +160,7 @@ def main() -> int:
                 confidence=conf,
                 sample_rate=reader.sample_rate,
                 samples_seen=samples_seen,
+                out_stream=json_stream,
             )
 
     return 0

@@ -13,13 +13,21 @@ cd mac-hardware-toys
 uv sync
 source .venv/bin/activate
 
+### Examples
+
+# flash your screen according to your microphone input
+microphone | screen-brightness
+
+# play a sine wave tone based on your screen lid-angle
+lid-angle | speaker
+
 # flash the keyboard according to your heartbeat (keep your wrists on palm rests)
-sudo accelerometer \
-  | bandpass 0.8 3 \
-  | tee >(visualizer) \
-  | metronome \
-  | volume-shift 0.8 \
-  | keyboard-brightness
+sudo accelerometer | metronome | keyboard-brightness
+
+# see more detail about any given signal by piping it into visualizer
+microphone | visualizer
+sine 1000 | visualizer
+sudo gyroscope | tee >(visualizer) | speaker
 ```
 
 ![Flashing keyboard gif](https://i.imgur.com/AS6tTre.gif)
@@ -35,6 +43,28 @@ sudo accelerometer \
 - Purpose: read Apple SPU accelerometer and emit mono signal.
 - Args: `--rate <hz>` (<= 800), `--axis x|y|z|mag`, `--raw`.
 - Notes: requires `sudo`.
+
+### `ambient-light`
+
+- Purpose: read ambient light sensor and emit tone mapped from low light to high light.
+- Default mapping: `500 Hz -> 5000 Hz` and low volume -> high volume as light goes `0% -> 100%`.
+- Args: `--rate`, `--low-hz`, `--high-hz`, `--low-volume`, `--high-volume`, `--json`.
+- Notes: requires `sudo`.
+
+### `lid-angle`
+
+- Purpose: read lid angle sensor and emit tone mapped from lid closed to open.
+- Default mapping: `500 Hz -> 5000 Hz` and low volume -> high volume as angle goes `--angle-min -> --angle-max`.
+- Args: `--rate`, `--low-hz`, `--high-hz`, `--low-volume`, `--high-volume`, `--angle-min`, `--angle-max`, `--json`.
+- Notes: requires `sudo`.
+
+### `gyroscope`
+
+- Purpose: read fused orientation (accel+gyro, Mahony AHRS) and emit tone mapped from the selected orientation axis.
+- Default mapping: `500 Hz -> 5000 Hz` and low volume -> high volume as selected axis angle maps to `0..360`.
+- Args: `--rate`, `--low-hz`, `--high-hz`, `--low-volume`, `--high-volume`, `--json`, `--axis roll|pitch|yaw`, `--decimate`.
+- Notes: requires `sudo`.
+  - `roll`/`pitch` are absolute to gravity; `yaw` is relative and can drift without magnetometer.
 
 ### `microphone`
 
@@ -65,7 +95,7 @@ sudo accelerometer \
 
 ### `heartbeat`
 
-- Purpose: emit BPM/confidence JSON lines from incoming signal (typically bandpassed).
+- Purpose: emit BPM/confidence JSON lines from incoming signal (typically bandpassed). When piped onward, it passes the signal through on stdout and writes JSON to stderr.
 - Args: `--interval`, `--window-seconds`, `--emit-final`, `--chunk-bytes`, `--raw --rate`.
 
 ---
@@ -111,6 +141,24 @@ Heartbeat from accelerometer:
 sudo accelerometer | bandpass 0.8 3 | heartbeat
 ```
 
+Ambient light as signal source:
+
+```bash
+sudo ambient-light | visualizer
+```
+
+Lid angle as JSONL:
+
+```bash
+sudo lid-angle --json
+```
+
+Gyroscope fused orientation as JSONL:
+
+```bash
+sudo gyroscope --axis roll --json
+```
+
 Music-reactive keyboard + speakers:
 
 ```bash
@@ -132,10 +180,22 @@ Auto-follow metronome from mic input, emits a metronome tone in sync with the be
 microphone | metronome | speaker
 ```
 
+Auto-follow metronome from accelerometer, driving keyboard pulses:
+
+```bash
+sudo accelerometer | metronome | keyboard-brightness
+```
+
 Metronome driving keyboard pulses:
 
 ```bash
 metronome 120 | keyboard-brightness
+```
+
+Heartbeat telemetry while still driving keyboard brightness:
+
+```bash
+sudo accelerometer | heartbeat | keyboard-brightness
 ```
 
 Set keyboard backlight to 100% and exit:
@@ -190,6 +250,7 @@ sudo accelerometer \
 ## Notes
 
 - `accelerometer` requires root (AppleSPU HID access).
+- `ambient-light`, `lid-angle`, and `gyroscope` also require root (AppleSPU HID access).
 - `microphone`/`speaker` depend on `sounddevice` + PortAudio runtime.
 - Keyboard/display brightness tools need supported hardware/permissions.
 - `keyboard-brightness` uses the bundled Apple Silicon KBPulse binary at `lib/KBPulse` (arm64).

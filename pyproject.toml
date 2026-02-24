@@ -16,14 +16,17 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = {"" = "lib"}
-py-modules = ["bootstrap", "dsp", "hardware", "signal_stream", "spu_sensor"]
+py-modules = ["bootstrap", "dsp", "hardware", "sensor_tone", "signal_stream", "spu_sensor"]
 script-files = [
     "accelerometer",
+    "ambient-light",
     "bandpass",
     "fan-speed",
     "frequency-shift",
+    "gyroscope",
     "heartbeat",
     "keyboard-brightness",
+    "lid-angle",
     "metronome",
     "microphone",
     "screen-brightness",

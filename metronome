@@ -20,13 +20,27 @@ except Exception:  # pragma: no cover - optional at runtime
 
 REPO_ROOT = Path(__file__).resolve().parent
 LIB_ROOT = REPO_ROOT / "lib"
-for _p in (LIB_ROOT, REPO_ROOT):
+for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
 from bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
+
+DEFAULT_MIN_BPM = 90.0
+DEFAULT_MAX_BPM = 170.0
+DEFAULT_LOCK_SECONDS = 3.0
+DEFAULT_DETECT_LOW_HZ = 25.0
+DEFAULT_DETECT_HIGH_HZ = 200.0
+
+# Auto-tuned defaults for low-rate sensor streams (e.g. accelerometer @ 800 Hz).
+SENSOR_AUTO_FS_MAX = 2000.0
+SENSOR_MIN_BPM = 45.0
+SENSOR_MAX_BPM = 170.0
+SENSOR_LOCK_SECONDS = 1.5
+SENSOR_DETECT_LOW_HZ = 0.35
+SENSOR_DETECT_HIGH_HZ = 8.0
 
 
 def clamp01(v: float) -> float:
@@ -100,7 +114,8 @@ class BeatTracker:
         # Keep one onset per beat at most; this suppresses half-beat/offbeat
         # chatter during bootstrap.
         self.refractory = self.min_interval * 0.78
-        self.detect_low_hz = max(5.0, float(detect_low_hz))
+        # Allow sub-audio detector bands for low-rate sensor streams.
+        self.detect_low_hz = max(0.05, float(detect_low_hz))
         self.detect_high_hz = min(float(detect_high_hz), self.fs * 0.45)
         if self.detect_high_hz <= self.detect_low_hz:
             self.detect_high_hz = min(self.fs * 0.45, self.detect_low_hz * 1.6)
@@ -400,7 +415,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
             "Generate metronome pulses. If stdin is piped in, BPM is auto-detected "
-            "(60-170 by default) and followed in real time."
+            "and followed in real time (low-rate sensor streams are auto-tuned)."
         )
     )
     p.add_argument("bpm", nargs="?", type=float, default=None, help="Fixed BPM (> 0). Optional.")
@@ -422,24 +437,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Emit exactly N pulses then exit 0 (default: unlimited).",
     )
-    p.add_argument("--min-bpm", type=float, default=90.0, help="Auto mode minimum BPM.")
-    p.add_argument("--max-bpm", type=float, default=170.0, help="Auto mode maximum BPM.")
+    p.add_argument("--min-bpm", type=float, default=DEFAULT_MIN_BPM, help="Auto mode minimum BPM.")
+    p.add_argument("--max-bpm", type=float, default=DEFAULT_MAX_BPM, help="Auto mode maximum BPM.")
     p.add_argument(
         "--lock-seconds",
         type=float,
-        default=3.0,
+        default=DEFAULT_LOCK_SECONDS,
         help="Hold silent for at least N seconds while acquiring lock in follow mode.",
     )
     p.add_argument(
         "--detect-low-hz",
         type=float,
-        default=25.0,
+        default=DEFAULT_DETECT_LOW_HZ,
         help="Beat detector high-pass cutoff (Hz). Raise to ignore rumble.",
     )
     p.add_argument(
         "--detect-high-hz",
         type=float,
-        default=200.0,
+        default=DEFAULT_DETECT_HIGH_HZ,
         help="Beat detector low-pass cutoff (Hz). Lower to ignore click/tone bleed.",
     )
     p.add_argument(
@@ -535,6 +550,25 @@ def run_follow(args: argparse.Namespace) -> int:
         return 2
 
     fs = float(reader.sample_rate)
+    min_bpm = float(args.min_bpm)
+    max_bpm = float(args.max_bpm)
+    detect_low_hz = float(args.detect_low_hz)
+    detect_high_hz = float(args.detect_high_hz)
+    lock_seconds = float(args.lock_seconds)
+
+    if fs <= SENSOR_AUTO_FS_MAX:
+        if args.min_bpm == DEFAULT_MIN_BPM and args.max_bpm == DEFAULT_MAX_BPM:
+            min_bpm = SENSOR_MIN_BPM
+            max_bpm = SENSOR_MAX_BPM
+        if (
+            args.detect_low_hz == DEFAULT_DETECT_LOW_HZ
+            and args.detect_high_hz == DEFAULT_DETECT_HIGH_HZ
+        ):
+            detect_low_hz = SENSOR_DETECT_LOW_HZ
+            detect_high_hz = SENSOR_DETECT_HIGH_HZ
+        if args.lock_seconds == DEFAULT_LOCK_SECONDS:
+            lock_seconds = SENSOR_LOCK_SECONDS
+
     seed_bpm = float(args.bpm) if args.bpm else None
     seed_period = (60.0 / seed_bpm) if (seed_bpm and seed_bpm > 0) else None
     synth = PulseSynth(
@@ -547,11 +581,11 @@ def run_follow(args: argparse.Namespace) -> int:
     )
     tracker = BeatTracker(
         sample_rate=fs,
-        min_bpm=float(args.min_bpm),
-        max_bpm=float(args.max_bpm),
+        min_bpm=min_bpm,
+        max_bpm=max_bpm,
         seed_bpm=seed_bpm,
-        detect_low_hz=float(args.detect_low_hz),
-        detect_high_hz=float(args.detect_high_hz),
+        detect_low_hz=detect_low_hz,
+        detect_high_hz=detect_high_hz,
     )
 
     if not args.raw:
@@ -578,7 +612,7 @@ def run_follow(args: argparse.Namespace) -> int:
     lock_anchor_period: float | None = tracker.period
     next_click_t: float | None = None
     first_t: float | None = None
-    lock_ready_t = float(args.lock_seconds)
+    lock_ready_t = lock_seconds
     locked = False
     lock_votes = 0
     phase_wait = False
@@ -590,7 +624,7 @@ def run_follow(args: argparse.Namespace) -> int:
     echo_guard_s = max(0.0, float(args.self_echo_ms) / 1000.0)
     echo_start_s = 0.012
     recent_triggers: deque[float] = deque()
-    ac = AutoCorrTempo(sample_rate=fs, min_bpm=float(args.min_bpm), max_bpm=float(args.max_bpm))
+    ac = AutoCorrTempo(sample_rate=fs, min_bpm=min_bpm, max_bpm=max_bpm)
     last_ac_update_t = -1e9
     ac_bpm = None
     ac_bpm_smooth = None
@@ -607,8 +641,8 @@ def run_follow(args: argparse.Namespace) -> int:
                 t = sample_index / fs
                 if first_t is None:
                     first_t = t
-                    lock_ready_t = t + max(0.0, float(args.lock_seconds))
-                period = tracker.period if tracker.period is not None else (60.0 / ((args.min_bpm + args.max_bpm) * 0.5))
+                    lock_ready_t = t + max(0.0, lock_seconds)
+                period = tracker.period if tracker.period is not None else (60.0 / ((min_bpm + max_bpm) * 0.5))
                 while recent_triggers and (t - recent_triggers[0]) > (echo_guard_s + 0.05):
                     recent_triggers.popleft()
                 suppress_active = any(echo_start_s <= (t - rt) <= echo_guard_s for rt in recent_triggers)

@@ -19,7 +19,7 @@ PROJECT_ROOT = (
     else COMMAND_DIR
 )
 LIB_ROOT = PROJECT_ROOT / "lib"
-for _p in (LIB_ROOT, PROJECT_ROOT):
+for _p in reversed((LIB_ROOT, PROJECT_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
