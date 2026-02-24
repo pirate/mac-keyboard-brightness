@@ -1,0 +1,23 @@
+lib/spu_sensor.py
+  1c3828d0dea557c7 2-3,10-33,45-53,56,86-100,102-107,110-118,163,167,174,177-197,205,207,209-211,213-219,223-270,282,296-307,312,315,320
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "512d291143ef486a0baa231e5d2611921e3bcdec",
+  "prompts": {
+    "1c3828d0dea557c7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019c894f-0ea5-7833-9c9d-ef2a202a94d7",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>",
+      "messages": [],
+      "total_additions": 169,
+      "total_deletions": 30,
+      "accepted_lines": 169,
+      "overriden_lines": 0
+    }
+  }
+}
