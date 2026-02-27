@@ -21,7 +21,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from bootstrap import maybe_reexec_venv, require_root
 
 maybe_reexec_venv(__file__)
 
@@ -106,12 +106,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def require_root() -> None:
-    if os.geteuid() != 0:
-        prog = Path(sys.argv[0]).name
-        raise SystemExit(f"{prog}: requires root. Run with: sudo {sys.argv[0]}")
-
-
 def extract_axis(samples: list[tuple[float, float, float]], axis: str) -> list[float]:
     if axis == "x":
         return [x for x, _, _ in samples]
@@ -150,7 +144,7 @@ def main() -> int:
     if args.rate <= 0 or args.rate > NATIVE_RATE_HZ:
         raise SystemExit("--rate must satisfy: 0 < rate <= 800")
 
-    require_root()
+    require_root(__file__)
     _debug("root ok")
 
     # Emit stream metadata before lower-level sensor setup so downstream

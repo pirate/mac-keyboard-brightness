@@ -7,7 +7,6 @@ import ctypes
 import ctypes.util
 import json
 import math
-import os
 import signal
 import sys
 import time
@@ -17,6 +16,7 @@ from typing import Callable
 
 import numpy as np
 
+from bootstrap import require_root as _require_root
 from signal_stream import FloatSignalWriter, install_sigpipe_default
 
 
@@ -34,10 +34,8 @@ def normalize(value: float, low: float, high: float) -> float:
     return clamp01((float(value) - float(low)) / (float(high) - float(low)))
 
 
-def require_root() -> None:
-    if os.geteuid() != 0:
-        prog = os.path.basename(sys.argv[0]) or "sensor"
-        raise SystemExit(f"{prog}: requires root. Run with: sudo {sys.argv[0]}")
+def require_root(script_path: str | None = None) -> None:
+    _require_root(script_path)
 
 
 @dataclass(frozen=True)

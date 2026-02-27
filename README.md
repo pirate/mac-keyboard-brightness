@@ -22,17 +22,16 @@ microphone | screen-brightness
 lid-angle | speaker
 
 # flash the keyboard according to your heartbeat (keep your wrists on palm rests)
-sudo accelerometer | metronome | keyboard-brightness
+accelerometer | metronome | keyboard-brightness
 
 # see more detail about any given signal by piping it into visualizer
 microphone | visualizer
 sine 1000 | visualizer
-sudo gyroscope | tee >(visualizer) | speaker
+gyroscope | tee >(speaker) | visualizer
 ```
 
 ![Flashing keyboard gif](https://i.imgur.com/AS6tTre.gif)
 ![Flashing display gif](https://i.imgur.com/cRFsoDM.gif)
-
 
 <img width="1004" height="665" alt="Screenshot 2026-02-20 at 11 19 36 PM" src="https://github.com/user-attachments/assets/c30f02b1-2695-4e5f-9724-e01986ba799d" />
 
@@ -42,28 +41,28 @@ sudo gyroscope | tee >(visualizer) | speaker
 
 - Purpose: read Apple SPU accelerometer and emit mono signal.
 - Args: `--rate <hz>` (<= 800), `--axis x|y|z|mag`, `--raw`.
-- Notes: requires `sudo`.
+- Notes: requires root; when run from a terminal it auto-prompts via `sudo`.
 
 ### `ambient-light`
 
 - Purpose: read ambient light sensor and emit tone mapped from low light to high light.
 - Default mapping: `500 Hz -> 5000 Hz` and low volume -> high volume as light goes `0% -> 100%`.
 - Args: `--rate`, `--low-hz`, `--high-hz`, `--low-volume`, `--high-volume`, `--json`.
-- Notes: requires `sudo`.
+- Notes: requires root; when run from a terminal it auto-prompts via `sudo`.
 
 ### `lid-angle`
 
 - Purpose: read lid angle sensor and emit tone mapped from lid closed to open.
 - Default mapping: `500 Hz -> 5000 Hz` and low volume -> high volume as angle goes `--angle-min -> --angle-max`.
 - Args: `--rate`, `--low-hz`, `--high-hz`, `--low-volume`, `--high-volume`, `--angle-min`, `--angle-max`, `--json`.
-- Notes: requires `sudo`.
+- Notes: requires root; when run from a terminal it auto-prompts via `sudo`.
 
 ### `gyroscope`
 
 - Purpose: read fused orientation (accel+gyro, Mahony AHRS) and emit tone mapped from the selected orientation axis.
 - Default mapping: `500 Hz -> 5000 Hz` and low volume -> high volume as selected axis angle maps to `0..360`.
 - Args: `--rate`, `--low-hz`, `--high-hz`, `--low-volume`, `--high-volume`, `--json`, `--axis roll|pitch|yaw`, `--decimate`.
-- Notes: requires `sudo`.
+- Notes: requires root; when run from a terminal it auto-prompts via `sudo`.
   - `roll`/`pitch` are absolute to gravity; `yaw` is relative and can drift without magnetometer.
 
 ### `microphone`
@@ -118,7 +117,7 @@ sudo gyroscope | tee >(visualizer) | speaker
   - `--set=<0..100>` without `--pulse` sets brightness and exits immediately (ignores stdin).
   - `--pulse=<N>` ignores stdin and pulses N times; `--set` controls pulse max brightness.
 
-###  `screen-brightness`
+### `screen-brightness`
 
 - Purpose: beat-follow display brightness control.
 - Args: `--send-hz`, `--min-level`, `--max-level`, `--gain`, `--attack-ms`, `--release-ms`, `--baseline-ms`, `--decay-per-s`, `--debug`, `--no-restore`, `--pulse`, `--on-time`, `--off-time`, `--set`.
@@ -138,25 +137,25 @@ sudo gyroscope | tee >(visualizer) | speaker
 Heartbeat from accelerometer:
 
 ```bash
-sudo accelerometer | bandpass 0.8 3 | heartbeat
+accelerometer | bandpass 0.8 3 | heartbeat
 ```
 
 Ambient light as signal source:
 
 ```bash
-sudo ambient-light | visualizer
+ambient-light | visualizer
 ```
 
 Lid angle as JSONL:
 
 ```bash
-sudo lid-angle --json
+lid-angle --json
 ```
 
 Gyroscope fused orientation as JSONL:
 
 ```bash
-sudo gyroscope --axis roll --json
+gyroscope --axis roll --json
 ```
 
 Music-reactive keyboard + speakers:
@@ -183,7 +182,7 @@ microphone | metronome | speaker
 Auto-follow metronome from accelerometer, driving keyboard pulses:
 
 ```bash
-sudo accelerometer | metronome | keyboard-brightness
+accelerometer | metronome | keyboard-brightness
 ```
 
 Metronome driving keyboard pulses:
@@ -195,7 +194,7 @@ metronome 120 | keyboard-brightness
 Heartbeat telemetry while still driving keyboard brightness:
 
 ```bash
-sudo accelerometer | heartbeat | keyboard-brightness
+accelerometer | heartbeat | keyboard-brightness
 ```
 
 Set keyboard backlight to 100% and exit:
@@ -225,32 +224,34 @@ screen-brightness --pulse=3 --on-time=1.2 --off-time=5.5 --set=100
 Metronome driving fan pulses:
 
 ```bash
-metronome 120 | sudo fan-speed --send-hz 4 --alternate --input-map beat --min-frac 0.30 --max-frac 0.70
+metronome 120 | fan-speed --send-hz 4 --alternate --input-map beat --min-frac 0.30 --max-frac 0.70
 ```
 
 Slow sine fan sweep (sync L/R):
 
 ```bash
-sine 0.1 | sudo fan-speed
+sine 0.1 | fan-speed
 ```
 
 One source, multiple sinks:
 
 ```bash
-sudo accelerometer \
+accelerometer \
   | bandpass 0.8 3 \
-  | tee >(keyboard-brightness) >(visualizer) \
+  | tee >(keyboard-brightness) \
   | frequency-shift 1000 \
   | volume-shift 0.8 \
-  | speaker
+  | tee >(speaker) \
+  | visualizer
 ```
 
 ---
 
 ## Notes
 
-- `accelerometer` requires root (AppleSPU HID access).
-- `ambient-light`, `lid-angle`, and `gyroscope` also require root (AppleSPU HID access).
+- `accelerometer` requires root (AppleSPU HID access) and will auto-reexec through `sudo` by default.
+- `ambient-light`, `lid-angle`, and `gyroscope` do the same for AppleSPU HID access.
+- Set `MSIG_AUTO_SUDO=0` to disable auto-reexec and only print rerun guidance on stderr.
 - `microphone`/`speaker` depend on `sounddevice` + PortAudio runtime.
 - Keyboard/display brightness tools need supported hardware/permissions.
 - `keyboard-brightness` uses the bundled Apple Silicon KBPulse binary at `lib/KBPulse` (arm64).
@@ -272,11 +273,11 @@ Most processors also support raw float32 input via `--raw --rate <hz>`.
 
 It's fun. Here are some ideas to get started:
 
- - make your keyboard lights flash for security alerts using [Security Growler](https://github.com/pirate/security-growler)
- - make your keyboard flash right before your display is about to sleep
- - make your keyboard flash on incoming email
- - make your keyboard flash to the beat of music
- - make your keyboard flash when your boss's iPhone comes within bluetooth range
+- make your keyboard lights flash for security alerts using [Security Growler](https://github.com/pirate/security-growler)
+- make your keyboard flash right before your display is about to sleep
+- make your keyboard flash on incoming email
+- make your keyboard flash to the beat of music
+- make your keyboard flash when your boss's iPhone comes within bluetooth range
 
 ---
 

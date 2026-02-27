@@ -63,7 +63,7 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"lid-angle dependencies unavailable: {exc}") from exc
 
-    require_root()
+    require_root(__file__)
     tone = tone_config_from_args(args)
 
     angle_min = float(args.angle_min)

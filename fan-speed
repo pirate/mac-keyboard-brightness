@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import signal
 import sys
 import time
@@ -16,7 +17,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from bootstrap import maybe_reexec_venv, require_root
 
 maybe_reexec_venv(__file__)
 
@@ -268,9 +269,16 @@ def main() -> int:
 
     controller = FanSpeedController()
     if not controller.available:
+        diag = controller.diagnostic
+        if os.geteuid() != 0 and (
+            diag.startswith("IOServiceOpen kr=") or diag.startswith("AppleSMC kr=")
+        ):
+            require_root(__file__)
         raise SystemExit(
-            f"fan-speed control unavailable ({controller.diagnostic}; run as root on Apple Silicon)"
+            f"fan-speed control unavailable ({diag}; run as root on Apple Silicon)"
         )
+    if controller.backend == "applesmc-iokit" and os.geteuid() != 0:
+        require_root(__file__)
 
     limits = controller.limits()
     if limits is None:
@@ -439,6 +447,9 @@ def main() -> int:
                     sends = 0
                     last_debug = now
     except RuntimeError as exc:
+        msg = str(exc)
+        if os.geteuid() != 0 and "AppleSMC kr=" in msg:
+            require_root(__file__)
         print(f"fan-speed: {exc}", file=sys.stderr)
         return 1
     finally:

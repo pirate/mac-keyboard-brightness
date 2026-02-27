@@ -169,7 +169,7 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"gyroscope dependencies unavailable: {exc}") from exc
 
-    require_root()
+    require_root(__file__)
     tone = tone_config_from_args(args)
     axis = str(args.axis)
     decimate = max(1, int(args.decimate))
