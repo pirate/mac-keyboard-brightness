@@ -1,11 +1,7 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "apple-hardware-toys"
-version = "0.1.0"
-description = "A collection of pipe-able scripts for reading Apple Silicon sensor hardware and peripherals."
+name = "mac-hardware-toys"
+version = "0.2.1"
+description = "A collection of pipe-able commands for playing with Apple Silicon sensor hardware and peripherals."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -35,3 +31,8 @@ script-files = [
     "visualizer",
     "volume-shift",
 ]
+
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
