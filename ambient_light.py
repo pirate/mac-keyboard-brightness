@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Stream ambient light sensor as MSIG1 tone or JSONL."""
 
-from __future__ import annotations
 
 import argparse
 import math
@@ -15,7 +14,7 @@ for _p in (LIB_ROOT, REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -24,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Read Apple ambient light sensor and map intensity to a tone stream."
     )
-    from sensor_tone import add_tone_output_args
+    from lib.sensor_tone import add_tone_output_args
 
     add_tone_output_args(
         parser,
@@ -41,7 +40,7 @@ def main() -> int:
     args = parse_args()
 
     try:
-        from sensor_tone import (
+        from lib.sensor_tone import (
             SPUReportStream,
             SensorFrame,
             clamp01,

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Stream fused orientation (accel+gyro) as MSIG1 tone or JSONL."""
 
-from __future__ import annotations
 
 import argparse
 import json
@@ -19,7 +18,7 @@ for _p in (LIB_ROOT, REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -126,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Read fused orientation and map selected axis to a tone stream."
     )
-    from sensor_tone import add_tone_output_args
+    from lib.sensor_tone import add_tone_output_args
 
     add_tone_output_args(
         parser,
@@ -163,9 +162,9 @@ def main() -> int:
     args = parse_args()
 
     try:
-        from sensor_tone import ToneMapper, ToneSynth, require_root, tone_config_from_args
-        from signal_stream import FloatSignalWriter, install_sigpipe_default
-        from spu_sensor import SHM_SIZE, sensor_worker, shm_read_new, shm_read_new_gyro
+        from lib.sensor_tone import ToneMapper, ToneSynth, require_root, tone_config_from_args
+        from lib.signal_stream import FloatSignalWriter, install_sigpipe_default
+        from lib.spu_sensor import SHM_SIZE, sensor_worker, shm_read_new, shm_read_new_gyro
     except Exception as exc:
         raise SystemExit(f"gyroscope dependencies unavailable: {exc}") from exc
 

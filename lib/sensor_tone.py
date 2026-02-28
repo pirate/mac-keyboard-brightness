@@ -1,6 +1,5 @@
 """Shared helpers for SPU sensor commands that emit tone streams or JSONL."""
 
-from __future__ import annotations
 
 import argparse
 import ctypes
@@ -16,8 +15,8 @@ from typing import Callable
 
 import numpy as np
 
-from bootstrap import require_root as _require_root
-from signal_stream import FloatSignalWriter, install_sigpipe_default
+from lib.bootstrap import require_root as _require_root
+from lib.signal_stream import FloatSignalWriter, install_sigpipe_default
 
 
 def clamp(value: float, low: float, high: float) -> float:

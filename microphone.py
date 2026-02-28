@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Capture default microphone and stream MSIG1 float32 mono."""
 
-from __future__ import annotations
 
 import argparse
 import queue
@@ -14,7 +13,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -80,7 +79,7 @@ def main() -> int:
         raise SystemExit(f"numpy is required: {exc}") from exc
 
     try:
-        from signal_stream import FloatSignalWriter
+        from lib.signal_stream import FloatSignalWriter
     except Exception as exc:
         raise SystemExit(f"microphone dependencies unavailable: {exc}") from exc
 

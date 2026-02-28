@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Drive KBPulse keyboard backlight intensity from an MSIG1 signal."""
 
-from __future__ import annotations
 
 import argparse
 import math
@@ -23,7 +22,7 @@ for _p in reversed((LIB_ROOT, PROJECT_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -285,8 +284,8 @@ def main() -> int:
         raise SystemExit("--set must be between 0 and 100")
 
     try:
-        from hardware import launch_kbpulse_stdin, send_kbpulse_level, stop_kbpulse
-        from signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
+        from lib.hardware import launch_kbpulse_stdin, send_kbpulse_level, stop_kbpulse
+        from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"keyboard-brightness dependencies unavailable: {exc}") from exc
 

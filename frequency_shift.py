@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Stream a mono signal through a cascaded realtime bandpass filter."""
+"""Realtime best-effort frequency scaling for mono streamed data."""
 
-from __future__ import annotations
 
 import argparse
 import sys
@@ -13,41 +12,19 @@ for _p in reversed((LIB_ROOT, ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Apply a realtime bandpass to an MSIG1 float32 mono stream."
+        description=(
+            "Scale frequencies in an MSIG1 float32 mono stream by a factor "
+            "(best-effort chunk-local algorithm)."
+        )
     )
-    p.add_argument(
-        "low_pos",
-        nargs="?",
-        type=float,
-        default=None,
-        help="Low cutoff in Hz (positional shorthand).",
-    )
-    p.add_argument(
-        "high_pos",
-        nargs="?",
-        type=float,
-        default=None,
-        help="High cutoff in Hz (positional shorthand).",
-    )
-    p.add_argument(
-        "--low",
-        type=float,
-        default=None,
-        help="Low cutoff in Hz (default: 0.8).",
-    )
-    p.add_argument(
-        "--high",
-        type=float,
-        default=None,
-        help="High cutoff in Hz (default: 3.0).",
-    )
+    p.add_argument("factor", type=float, help="Frequency multiplier (> 0).")
     p.add_argument(
         "--chunk-bytes",
         type=int,
@@ -72,8 +49,8 @@ def main() -> int:
     args = build_parser().parse_args()
 
     try:
-        from dsp import CascadedBandpass
-        from signal_stream import (
+        from lib.dsp import ChunkFrequencyScaler
+        from lib.signal_stream import (
             FloatSignalReader,
             FloatSignalWriter,
             StreamFormatError,
@@ -85,13 +62,11 @@ def main() -> int:
 
     install_sigpipe_default()
 
-    low = args.low if args.low is not None else (args.low_pos if args.low_pos is not None else 0.8)
-    high = args.high if args.high is not None else (args.high_pos if args.high_pos is not None else 3.0)
-    if low <= 0 or high <= low:
-        print("error: require 0 < --low < --high", file=sys.stderr)
+    if args.factor <= 0:
+        print("error: factor must be > 0", file=sys.stderr)
         return 2
-    if args.chunk_bytes < 4:
-        print("error: --chunk-bytes must be >= 4", file=sys.stderr)
+    if args.chunk_bytes < 8:
+        print("error: --chunk-bytes must be >= 8", file=sys.stderr)
         return 2
 
     try:
@@ -102,21 +77,12 @@ def main() -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    nyquist = 0.5 * reader.sample_rate
-    if high >= nyquist:
-        print(
-            f"error: --high must be < Nyquist ({nyquist:.3f} Hz at {reader.sample_rate:.1f} Hz)",
-            file=sys.stderr,
-        )
-        return 2
-
-    filt = CascadedBandpass(reader.sample_rate, low, high)
+    scaler = ChunkFrequencyScaler(factor=args.factor)
     writer = FloatSignalWriter.to_stdout(sample_rate=reader.sample_rate, raw=False)
 
     try:
         for chunk in reader.iter_chunks(chunk_bytes=args.chunk_bytes):
-            out = filt.process(chunk)
-            writer.write(out)
+            writer.write(scaler.process(chunk))
         writer.flush()
     except BrokenPipeError:
         return 0

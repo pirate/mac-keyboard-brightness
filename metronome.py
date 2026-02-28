@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Generate metronome pulses: fixed BPM or auto-follow BPM from stdin."""
 
-from __future__ import annotations
 
 import argparse
 import math
@@ -24,7 +23,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -537,7 +536,7 @@ def run_fixed(args: argparse.Namespace) -> int:
 
 def run_follow(args: argparse.Namespace) -> int:
     try:
-        from signal_stream import FloatSignalReader, StreamFormatError
+        from lib.signal_stream import FloatSignalReader, StreamFormatError
     except Exception as exc:
         raise SystemExit(f"metronome follow-mode dependencies unavailable: {exc}") from exc
 

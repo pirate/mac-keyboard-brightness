@@ -1,6 +1,5 @@
 """Hardware helpers for keyboard/display brightness and fan commands."""
 
-from __future__ import annotations
 
 import ctypes
 import ctypes.util
@@ -9,21 +8,35 @@ import pwd
 import shutil
 import struct
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 
 def resolve_kbpulse_binary(start_dir: str | None = None) -> str | None:
-    """Resolve KBPulse binary from a fixed repo-relative location."""
+    """Resolve KBPulse binary from lib/ locations only."""
+    candidates: list[Path] = []
     if start_dir:
         base = Path(start_dir).resolve()
         if base.name == "bin" and base.parent.name == ".venv":
             base = base.parent.parent
+        candidates.extend(
+            [
+                base / "lib" / "KBPulse",
+                base.parent / "lib" / "KBPulse",
+            ]
+        )
     else:
         base = Path(__file__).resolve().parent.parent
-    cand = base / "lib" / "KBPulse"
-    if os.path.isfile(cand) and os.access(cand, os.X_OK):
-        return str(cand)
+    candidates.extend(
+        [
+            base / "lib" / "KBPulse",
+            Path(sys.prefix) / "lib" / "KBPulse",
+        ]
+    )
+    for cand in candidates:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return str(cand)
     return None
 
 

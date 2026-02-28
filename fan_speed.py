@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Drive Mac fan speeds from an incoming MSIG1 signal."""
 
-from __future__ import annotations
 
 import argparse
 import math
@@ -17,7 +16,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv, require_root
+from lib.bootstrap import maybe_reexec_venv, require_root
 
 maybe_reexec_venv(__file__)
 
@@ -259,8 +258,8 @@ def main() -> int:
         raise SystemExit("--beat-hold-ms must be >= 0")
 
     try:
-        from hardware import FanSpeedController
-        from signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
+        from lib.hardware import FanSpeedController
+        from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"fan-speed dependencies unavailable: {exc}") from exc
 

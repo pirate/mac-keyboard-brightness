@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Terminal visualizer with live waveform, FFT stats, spectrogram, and RMS trend."""
 
-from __future__ import annotations
 
 import argparse
 import math
@@ -19,7 +18,7 @@ for _p in reversed((LIB_ROOT, ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -852,8 +851,8 @@ def main() -> int:
     global np
     try:
         import numpy as np_module
-        from dsp import AdaptiveLevel
-        from signal_stream import FloatSignalReader, StreamFormatError
+        from lib.dsp import AdaptiveLevel
+        from lib.signal_stream import FloatSignalReader, StreamFormatError
     except ModuleNotFoundError as exc:
         print(f"error: missing dependency: {exc}", file=sys.stderr)
         return 2

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Estimate heartbeat BPM/confidence from a streamed mono signal."""
 
-from __future__ import annotations
 
 import argparse
 import json
@@ -15,7 +14,7 @@ for _p in reversed((LIB_ROOT, ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -88,8 +87,8 @@ def main() -> int:
     args = build_parser().parse_args()
 
     try:
-        from dsp import HeartbeatEstimator
-        from signal_stream import (
+        from lib.dsp import HeartbeatEstimator
+        from lib.signal_stream import (
             FloatSignalReader,
             FloatSignalWriter,
             StreamFormatError,

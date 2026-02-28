@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Read MSIG1 float32 mono stream from stdin and play to speakers."""
 
-from __future__ import annotations
 
 import argparse
 import sys
@@ -13,7 +12,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -46,8 +45,8 @@ def main() -> int:
         raise SystemExit(f"numpy is required: {exc}") from exc
 
     try:
-        from dsp import LinearResampler
-        from signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
+        from lib.dsp import LinearResampler
+        from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"speaker dependencies unavailable: {exc}") from exc
 

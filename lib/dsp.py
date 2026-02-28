@@ -1,6 +1,5 @@
 """Streaming DSP helpers used by the ./bin commands."""
 
-from __future__ import annotations
 
 import math
 from collections import deque

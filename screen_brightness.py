@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Drive display brightness from an incoming MSIG1 signal envelope."""
 
-from __future__ import annotations
 
 import argparse
 import math
@@ -16,7 +15,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -180,8 +179,8 @@ def main() -> int:
         raise SystemExit("--set must be between 0 and 100")
 
     try:
-        from hardware import DisplayBrightnessController
-        from signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
+        from lib.hardware import DisplayBrightnessController
+        from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
     except Exception as exc:
         raise SystemExit(f"screen-brightness dependencies unavailable: {exc}") from exc
 

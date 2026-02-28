@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Scale stream amplitude by a constant gain factor."""
 
-from __future__ import annotations
 
 import argparse
 import sys
@@ -13,7 +12,7 @@ for _p in reversed((LIB_ROOT, ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv
+from lib.bootstrap import maybe_reexec_venv
 
 maybe_reexec_venv(__file__)
 
@@ -48,7 +47,7 @@ def main() -> int:
 
     try:
         import numpy as np
-        from signal_stream import (
+        from lib.signal_stream import (
             FloatSignalReader,
             FloatSignalWriter,
             StreamFormatError,

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Stream Apple SPU accelerometer as MSIG1 float32 mono."""
 
-from __future__ import annotations
 
 import argparse
 import math
@@ -21,7 +20,7 @@ for _p in reversed((LIB_ROOT, REPO_ROOT)):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from bootstrap import maybe_reexec_venv, require_root
+from lib.bootstrap import maybe_reexec_venv, require_root
 
 maybe_reexec_venv(__file__)
 
@@ -154,7 +153,7 @@ def main() -> int:
         _debug("header written")
 
     try:
-        from spu_sensor import SHM_SIZE, sensor_worker, shm_read_new
+        from lib.spu_sensor import SHM_SIZE, sensor_worker, shm_read_new
     except Exception as exc:
         raise SystemExit(f"accelerometer dependencies unavailable: {exc}") from exc
     _debug("spu_sensor imported")

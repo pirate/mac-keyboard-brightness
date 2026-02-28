@@ -5,7 +5,6 @@ Protocol:
 - Payload: little-endian float32 mono samples.
 """
 
-from __future__ import annotations
 
 import os
 import re

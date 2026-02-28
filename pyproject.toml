@@ -1,6 +1,6 @@
 [project]
 name = "mac-hardware-toys"
-version = "0.2.1"
+version = "0.2.5"
 description = "A collection of pipe-able commands for playing with Apple Silicon sensor hardware and peripherals."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,27 +10,48 @@ dependencies = [
     "sounddevice>=0.4",
 ]
 
+[project.scripts]
+"accelerometer" = "accelerometer:main"
+"ambient-light" = "ambient_light:main"
+"bandpass" = "bandpass:main"
+"fan-speed" = "fan_speed:main"
+"frequency-shift" = "frequency_shift:main"
+"gyroscope" = "gyroscope:main"
+"heartbeat" = "heartbeat:main"
+"keyboard-brightness" = "keyboard_brightness:main"
+"lid-angle" = "lid_angle:main"
+"metronome" = "metronome:main"
+"microphone" = "microphone:main"
+"screen-brightness" = "screen_brightness:main"
+"sine" = "sine:main"
+"speaker" = "speaker:main"
+"visualizer" = "visualizer:main"
+"volume-shift" = "volume_shift:main"
+
 [tool.setuptools]
-package-dir = {"" = "lib"}
-py-modules = ["bootstrap", "dsp", "hardware", "sensor_tone", "signal_stream", "spu_sensor"]
-script-files = [
+package-dir = {"" = "."}
+packages = ["lib"]
+py-modules = [
     "accelerometer",
-    "ambient-light",
+    "ambient_light",
     "bandpass",
-    "fan-speed",
-    "frequency-shift",
+    "fan_speed",
+    "frequency_shift",
     "gyroscope",
     "heartbeat",
-    "keyboard-brightness",
-    "lid-angle",
+    "keyboard_brightness",
+    "lid_angle",
     "metronome",
     "microphone",
-    "screen-brightness",
+    "screen_brightness",
     "sine",
     "speaker",
     "visualizer",
-    "volume-shift",
+    "volume_shift",
 ]
+
+[tool.setuptools.data-files]
+lib = ["lib/KBPulse", "lib/LICENSE"]
 
 
 [build-system]
