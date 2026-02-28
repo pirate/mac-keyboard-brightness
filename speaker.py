@@ -6,6 +6,9 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import sounddevice as sd
+
 REPO_ROOT = Path(__file__).resolve().parent
 LIB_ROOT = REPO_ROOT / "lib"
 for _p in reversed((LIB_ROOT, REPO_ROOT)):
@@ -39,24 +42,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    try:
-        import numpy as np
-    except Exception as exc:
-        raise SystemExit(f"numpy is required: {exc}") from exc
-
-    try:
-        from lib.dsp import LinearResampler
-        from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
-    except Exception as exc:
-        raise SystemExit(f"speaker dependencies unavailable: {exc}") from exc
+    from lib.dsp import LinearResampler
+    from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
 
     if is_tty_stdin():
         raise SystemExit("speaker expects an MSIG1 stream on stdin")
-
-    try:
-        import sounddevice as sd
-    except Exception as exc:
-        raise SystemExit(f"sounddevice is required: {exc}") from exc
 
     try:
         reader = FloatSignalReader.from_stdin()

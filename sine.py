@@ -7,6 +7,8 @@ import math
 import sys
 from pathlib import Path
 
+import numpy as np
+
 REPO_ROOT = Path(__file__).resolve().parent
 LIB_ROOT = REPO_ROOT / "lib"
 for _p in reversed((LIB_ROOT, REPO_ROOT)):
@@ -73,15 +75,7 @@ def main() -> int:
     if args.seconds is not None and args.seconds <= 0:
         raise SystemExit("--seconds must be > 0")
 
-    try:
-        import numpy as np
-    except Exception as exc:
-        raise SystemExit(f"numpy is required: {exc}") from exc
-
-    try:
-        from lib.signal_stream import FloatSignalWriter, install_sigpipe_default
-    except Exception as exc:
-        raise SystemExit(f"sine dependencies unavailable: {exc}") from exc
+    from lib.signal_stream import FloatSignalWriter, install_sigpipe_default
 
     install_sigpipe_default()
     writer = FloatSignalWriter.to_stdout(sample_rate=float(args.rate), raw=args.raw)

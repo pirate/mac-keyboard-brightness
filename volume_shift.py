@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent
 LIB_ROOT = ROOT / "lib"
 for _p in reversed((LIB_ROOT, ROOT)):
@@ -45,17 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
 
-    try:
-        import numpy as np
-        from lib.signal_stream import (
-            FloatSignalReader,
-            FloatSignalWriter,
-            StreamFormatError,
-            install_sigpipe_default,
-        )
-    except ModuleNotFoundError as exc:
-        print(f"error: missing dependency: {exc}", file=sys.stderr)
-        return 2
+    from lib.signal_stream import (
+        FloatSignalReader,
+        FloatSignalWriter,
+        StreamFormatError,
+        install_sigpipe_default,
+    )
 
     install_sigpipe_default()
 

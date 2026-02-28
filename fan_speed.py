@@ -257,11 +257,8 @@ def main() -> int:
     if args.beat_hold_ms < 0:
         raise SystemExit("--beat-hold-ms must be >= 0")
 
-    try:
-        from lib.hardware import FanSpeedController
-        from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
-    except Exception as exc:
-        raise SystemExit(f"fan-speed dependencies unavailable: {exc}") from exc
+    from lib.hardware import FanSpeedController
+    from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
 
     if is_tty_stdin():
         raise SystemExit("fan-speed expects an MSIG1 stream on stdin")

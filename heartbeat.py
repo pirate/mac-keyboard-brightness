@@ -86,17 +86,13 @@ def emit_line(
 def main() -> int:
     args = build_parser().parse_args()
 
-    try:
-        from lib.dsp import HeartbeatEstimator
-        from lib.signal_stream import (
-            FloatSignalReader,
-            FloatSignalWriter,
-            StreamFormatError,
-            install_sigpipe_default,
-        )
-    except ModuleNotFoundError as exc:
-        print(f"error: missing dependency: {exc}", file=sys.stderr)
-        return 2
+    from lib.dsp import HeartbeatEstimator
+    from lib.signal_stream import (
+        FloatSignalReader,
+        FloatSignalWriter,
+        StreamFormatError,
+        install_sigpipe_default,
+    )
 
     install_sigpipe_default()
 

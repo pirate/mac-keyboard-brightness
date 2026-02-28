@@ -49,18 +49,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    try:
-        from lib.sensor_tone import (
-            SPUReportStream,
-            SensorFrame,
-            clamp,
-            normalize,
-            require_root,
-            run_sensor_source,
-            tone_config_from_args,
-        )
-    except Exception as exc:
-        raise SystemExit(f"lid-angle dependencies unavailable: {exc}") from exc
+    from lib.sensor_tone import (
+        SPUReportStream,
+        SensorFrame,
+        clamp,
+        normalize,
+        require_root,
+        run_sensor_source,
+        tone_config_from_args,
+    )
 
     require_root(__file__)
     tone = tone_config_from_args(args)

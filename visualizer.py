@@ -12,6 +12,8 @@ import time
 from collections import deque
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent
 LIB_ROOT = ROOT / "lib"
 for _p in reversed((LIB_ROOT, ROOT)):
@@ -42,7 +44,6 @@ SPEC_PALETTE = [
     159, 195, 231, 224, 217, 210, 203, 196,
 ]
 _ANSI_RE = re.compile(r"\x1b\[[^m]*m")
-np = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -848,15 +849,8 @@ def render(*, state: LiveStats, first_frame: bool) -> bool:
 def main() -> int:
     args = build_parser().parse_args()
 
-    global np
-    try:
-        import numpy as np_module
-        from lib.dsp import AdaptiveLevel
-        from lib.signal_stream import FloatSignalReader, StreamFormatError
-    except ModuleNotFoundError as exc:
-        print(f"error: missing dependency: {exc}", file=sys.stderr)
-        return 2
-    np = np_module
+    from lib.dsp import AdaptiveLevel
+    from lib.signal_stream import FloatSignalReader, StreamFormatError
 
     if args.fps <= 0:
         print("error: --fps must be > 0", file=sys.stderr)

@@ -12,10 +12,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-try:
-    import numpy as np
-except Exception:  # pragma: no cover - optional at runtime
-    np = None
+import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent
 LIB_ROOT = REPO_ROOT / "lib"
@@ -355,8 +352,6 @@ class AutoCorrTempo:
             self.count = 0
 
     def estimate(self, prior_bpm: float | None) -> tuple[float | None, float]:
-        if np is None:
-            return None, 0.0
         if len(self.buf) < int(self.env_fs * 1.4):
             return None, 0.0
 
@@ -535,10 +530,7 @@ def run_fixed(args: argparse.Namespace) -> int:
 
 
 def run_follow(args: argparse.Namespace) -> int:
-    try:
-        from lib.signal_stream import FloatSignalReader, StreamFormatError
-    except Exception as exc:
-        raise SystemExit(f"metronome follow-mode dependencies unavailable: {exc}") from exc
+    from lib.signal_stream import FloatSignalReader, StreamFormatError
 
     try:
         reader = FloatSignalReader.from_stdin()

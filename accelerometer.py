@@ -149,13 +149,13 @@ def main() -> int:
     # Emit stream metadata before lower-level sensor setup so downstream
     # pipeline tools can validate format immediately.
     if not args.raw:
-        write_header(float(args.rate))
+        try:
+            write_header(float(args.rate))
+        except BrokenPipeError:
+            return 0
         _debug("header written")
 
-    try:
-        from lib.spu_sensor import SHM_SIZE, sensor_worker, shm_read_new
-    except Exception as exc:
-        raise SystemExit(f"accelerometer dependencies unavailable: {exc}") from exc
+    from lib.spu_sensor import SHM_SIZE, sensor_worker, shm_read_new
     _debug("spu_sensor imported")
 
     decimate = max(1, int(math.floor(NATIVE_RATE_HZ / float(args.rate))))

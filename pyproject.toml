@@ -1,6 +1,6 @@
 [project]
 name = "mac-hardware-toys"
-version = "0.2.5"
+version = "0.2.6"
 description = "A collection of pipe-able commands for playing with Apple Silicon sensor hardware and peripherals."
 readme = "README.md"
 requires-python = ">=3.11"

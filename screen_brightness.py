@@ -178,11 +178,8 @@ def main() -> int:
     if args.set_percent is not None and (args.set_percent < 0 or args.set_percent > 100):
         raise SystemExit("--set must be between 0 and 100")
 
-    try:
-        from lib.hardware import DisplayBrightnessController
-        from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
-    except Exception as exc:
-        raise SystemExit(f"screen-brightness dependencies unavailable: {exc}") from exc
+    from lib.hardware import DisplayBrightnessController
+    from lib.signal_stream import FloatSignalReader, StreamFormatError, is_tty_stdin
 
     lo = clamp01(args.min_level)
     hi = clamp01(args.max_level)

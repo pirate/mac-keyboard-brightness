@@ -7,6 +7,9 @@ import queue
 import sys
 from pathlib import Path
 
+import numpy as np
+import sounddevice as sd
+
 REPO_ROOT = Path(__file__).resolve().parent
 LIB_ROOT = REPO_ROOT / "lib"
 for _p in reversed((LIB_ROOT, REPO_ROOT)):
@@ -73,20 +76,7 @@ def resolve_input_rate(sd: object, requested: float | None, device: object) -> f
 def main() -> int:
     args = parse_args()
 
-    try:
-        import numpy as np
-    except Exception as exc:
-        raise SystemExit(f"numpy is required: {exc}") from exc
-
-    try:
-        from lib.signal_stream import FloatSignalWriter
-    except Exception as exc:
-        raise SystemExit(f"microphone dependencies unavailable: {exc}") from exc
-
-    try:
-        import sounddevice as sd
-    except Exception as exc:
-        raise SystemExit(f"sounddevice is required: {exc}") from exc
+    from lib.signal_stream import FloatSignalWriter
 
     if args.list_devices:
         print(sd.query_devices())

@@ -161,12 +161,9 @@ def _angle_for_axis(axis: str, roll: float, pitch: float, yaw: float) -> float:
 def main() -> int:
     args = parse_args()
 
-    try:
-        from lib.sensor_tone import ToneMapper, ToneSynth, require_root, tone_config_from_args
-        from lib.signal_stream import FloatSignalWriter, install_sigpipe_default
-        from lib.spu_sensor import SHM_SIZE, sensor_worker, shm_read_new, shm_read_new_gyro
-    except Exception as exc:
-        raise SystemExit(f"gyroscope dependencies unavailable: {exc}") from exc
+    from lib.sensor_tone import ToneMapper, ToneSynth, require_root, tone_config_from_args
+    from lib.signal_stream import FloatSignalWriter, install_sigpipe_default
+    from lib.spu_sensor import SHM_SIZE, sensor_worker, shm_read_new, shm_read_new_gyro
 
     require_root(__file__)
     tone = tone_config_from_args(args)
