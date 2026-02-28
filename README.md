@@ -7,11 +7,7 @@ All tools input and output a standardized mono audio signal that represents thei
 ## Quickstart
 
 ```bash
-git clone https://github.com/pirate/mac-hardware-toys
-cd mac-hardware-toys
-
-uv sync
-source .venv/bin/activate
+pip install mac-hardware-toys
 
 ### Examples
 
@@ -257,6 +253,16 @@ accelerometer \
 - `keyboard-brightness` uses the bundled Apple Silicon KBPulse binary at `lib/KBPulse` (arm64).
 - `fan-speed` uses AppleSMC private IOKit APIs on Apple Silicon; writing fan targets typically requires `sudo`.
 - `frequency-shift` is intentionally lightweight and artifact-prone at extreme factors.
+
+### Development Setup
+
+```python
+git clone https://github.com/pirate/mac-hardware-toys
+cd mac-hardware-toys
+
+uv sync
+source .venv/bin/activate
+```
 
 ## Stdio Audio Format
 
