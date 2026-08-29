@@ -6,27 +6,30 @@ Modern MacBook Pros are full of interesting hardware: lid-angle and ambient-ligh
 
 This repo exposes that hardware as small, fast, composable Unix CLIs backed by Apple’s private APIs.
 
-- **sensors:**  ( only supported on non-Intel Apple laptops)
-  - 📳 `accelerometer`
-  - 🪐 `gyroscope`
-  - 🎤︎︎ `microphone`
-  - 💻 `lid-angle`
-  - 💡 `ambient-light`
-  
+* **sensors:**  ( only supported on non-Intel Apple laptops)
 
-- **transformers:**  (pipe any signal source in, outputs new signal)
-  - 🎚 `volume-shift`
-  - ⏭ `frequency-shift`
-  - 🗜 `bandpass`
-  - 🥁 `metronome`
-  - ❤️ `heartbeat` detect human-heartbeat BPM or any dominant beat in music or other sensor data between 60 ~ 180 BPM
+  * 📳 [`accelerometer`](#accelerometer)
+  * 🪐 [`gyroscope`](#gyroscope)
+  * 🎤︎︎ [`microphone`](#microphone)
+  * 💻 [`lid-angle`](#lid-angle)
+  * 💡 [`ambient-light`](#ambient-light)
 
-- **outputs:**  
-  - 📊 `visualizer` (live TUI that shows frequency bins, histogram, and more)
-  - 🔈 `speaker`
-  - ⌨️ `keyboard-brightness` ( only on `M*` Mac laptops)
-  - 🔆 `screen-brightness` ( only on `M*` Mac laptops)
-  - 𖣘 `fan-speed` ( only on `M*` Mac laptops)
+* **transformers:**  (pipe any signal source in, outputs new signal)
+
+  * 🎚 [`volume-shift`](#volume-shift-gain)
+  * ⏭ [`frequency-shift`](#frequency-shift-factor)
+  * 🗜 [`bandpass`](#bandpass-low_hz-high_hz)
+  * 🥁 [`metronome`](#metronome-bpm)
+  * ❤️ [`heartbeat`](#heartbeat) detect human-heartbeat BPM or any dominant beat in music or other sensor data between 60 ~ 180 BPM
+
+* **outputs:**
+
+  * 📊 [`visualizer`](#visualizer) (live TUI that shows frequency bins, histogram, and more)
+  * 🔈 [`speaker`](#speaker)
+  * ⌨️ [`keyboard-brightness`](#keyboard-brightness) ( only on `M*` Mac laptops)
+  * 🔆 [`screen-brightness`](#screen-brightness) ( only on `M*` Mac laptops)
+  * 𖣘 [`fan-speed`](#fan-speed) ( only on `M*` Mac laptops)
+
 
 ---
 
