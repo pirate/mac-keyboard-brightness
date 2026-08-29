@@ -1,29 +1,59 @@
-# 🎛️ CLI to Get/Set/Stream Mac Hardware Outputs & Sensors Inputs
-
-> `pip install mac-hardware-toys`
+# 🎛️ CLIs to Get/Set/Stream Mac Hardware Outputs & Sensors Inputs
 
 ---
 
-This is a suite of composable CLI tools for getting, setting, and streaming/transforming raw Mac hardware sensor values.
+Modern MacBook Pros are full of interesting hardware: lid-angle and ambient-light sensors, microphones, undocumented MEMS accelerometers and gyroscopes, plus fast controls for keyboard/display brightness, speakers, fans, and more.
 
-- **sensors:**  
-  `accelerometer`, `microphone`, `lid-angle`, `ambient-light`, `gyroscope`
+This repo exposes that hardware as small, fast, composable Unix CLIs backed by Apple’s private APIs.
 
-- **transformers:**  
-  `volume-shift`, `frequency-shift`, `bandpass`, `metronome`, `heartbeat`
+- **sensors:**  ( only supported on non-Intel Apple laptops)
+  - 📳 `accelerometer`
+  - 🪐 `gyroscope`
+  - 🎤︎︎ `microphone`
+  - 💻 `lid-angle`
+  - 💡 `ambient-light`
+  
+
+- **transformers:**  (pipe any signal source in, outputs new signal)
+  - 🎚 `volume-shift`
+  - ⏭ `frequency-shift`
+  - 🗜 `bandpass`
+  - 🥁 `metronome`
+  - ❤️ `heartbeat` detect human-heartbeat BPM or any dominant beat in music or other sensor data between 60 ~ 180 BPM
 
 - **outputs:**  
-  `speaker`, `keyboard-brightness`, `screen-brightness`, `visualizer`, `fan-speed`
+  - 📊 `visualizer` (live TUI that shows frequency bins, histogram, and more)
+  - 🔈 `speaker`
+  - ⌨️ `keyboard-brightness` ( only on `M*` Mac laptops)
+  - 🔆 `screen-brightness` ( only on `M*` Mac laptops)
+  - 𖣘 `fan-speed` ( only on `M*` Mac laptops)
 
 ---
 
-Most commands have basic args like `--set ...`, `--json`, `--raw`, making it easy to do useful things with your mac hardware.
+## Quickstart
+
+```bash
+# recommended: install the suite with uv
+uv tool install mac-hardware-toys
+
+# show FFT + more info about current motion
+accelerometer | visualizer
+
+# pulses your keyboard lights to the beat
+microphone | heartbeat | keyboard-brightness
+
+# or get/set raw values directly, and more...
+keyboard-brightness --help
+```
+
+All commands have basic args like `--set ...`, `--json`, `--raw`, making it easy to do useful things with your mac hardware.
 
 >  - 💡 Flash your ⌨️ keyboard lights + play a sound when a background processes completes
->  - ☀️ Pulse your screen brightness in sync with detected ambient 🎵 music bpm / ❤️ your detected heartbeat via accelerometer
+>  - 🎵 Pulse your fans in sync with some musc playing ambiently 🎵 music bpm
+>  - ❤️ Pulse your screen brightness in sync with your heart, detecting your pulse from wrists resting on laptop (via accelerometer)
 >  - 🔬 Get/Set/Stream accelerometer+gyroscope+microphone/etc. data as simple `--raw` scalar values or `--json`, or...
   
-All commands can also pipe in/out a a simple 🎼 ***mono audio*** format.
+By default when used in pipes, commands represent signals as an audible 🎼 ***mono audio*** tone, expressed as a byte stream.
 
 > 🎤 read realtime sensor feeds represented as sine waves  
 > 🎛️ mix/filter/transform those sine waves to shape them  
