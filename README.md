@@ -131,7 +131,7 @@ gyroscope | tee >(speaker) | visualizer
 
 ### `heartbeat`
 
-- Purpose: emit BPM/confidence JSON lines from incoming signal (typically bandpassed). When piped onward, it passes the signal through on stdout and writes JSON to stderr.
+- Purpose: emit BPM/confidence JSON lines from incoming signal (typically bandpassed). When piped onward, it passes the signal through on stdout and writes JSON to stderr. Perfect for detecting your actual heartbeat from the subtle pulsing of your wrists resting on the palmrests. Also works great for detecting BPM from music.
 - Args: `--interval`, `--window-seconds`, `--emit-final`, `--chunk-bytes`, `--raw --rate`.
 
 ---
